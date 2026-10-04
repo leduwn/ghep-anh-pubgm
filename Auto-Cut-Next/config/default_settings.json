@@ -1,0 +1,21 @@
+{
+  "workspace_dir": "workspace",
+  "output_dir": "output",
+  "photoshop_path": null,
+  "ocr_device": "auto",
+  "ocr_workers": 1,
+  "classifier_accept_threshold": 0.85,
+  "classifier_review_threshold": 0.55,
+  "detector_confidence_threshold": 0.6,
+  "lock_threshold": 0.5,
+  "empty_detail_threshold": 0.15,
+  "duplicate_threshold": 0.92,
+  "max_output_size": [
+    5000,
+    5000
+  ],
+  "default_gun_columns": 4,
+  "default_vehicle_rows": 2,
+  "auto_color": "preview",
+  "enable_debug": false
+}

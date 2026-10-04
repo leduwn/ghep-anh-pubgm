@@ -1,0 +1,25 @@
+"""Unit tests for structured stage logging."""
+
+from core.constants import Stage
+from core.logging import StageLogger
+
+
+def test_stage_logger_creates_file_and_logs(tmp_path):
+    log_dir = tmp_path / "logs"
+    logger = StageLogger(log_dir=log_dir, log_filename="test.log", console=False)
+
+    logger.info("Starting ingest", stage=Stage.INGEST, account="ACC01", source="img.png", status="INIT")
+    logger.warning("Low confidence card", stage=Stage.DETECT, account="ACC01", source="img.png", status="WARN", duration_ms=45.2)
+
+    log_file = log_dir / "test.log"
+    assert log_file.is_file()
+    content = log_file.read_text(encoding="utf-8")
+
+    assert "[INFO ]" in content
+    assert "[INGEST   ]" in content
+    assert "[ACC01]" in content
+    assert "Starting ingest" in content
+
+    assert "[WARN ]" in content or "[WARNI]" in content or "WARN" in content
+    assert "[DETECT   ]" in content
+    assert "(45.2ms)" in content
