@@ -1,0 +1,38 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+temp_inspect/
+
+# Ảnh đầu vào & đầu ra (Giữ khung thư mục, bỏ qua dữ liệu bên trong)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+**/input/*
+!**/input/.gitkeep
+**/output/*
+!**/output/.gitkeep
+
+# File ảnh & nén
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+*.bmp
+*.webp
+*.zip
+
+# Mẫu trần sảnh đi kèm bộ nhận diện trang phục
+!tool/Cắt Trang Phục/assets/supercar_ceiling.png
+!tool/Cắt Item/assets/hair_title.png
+!tool/Cắt Item/assets/hair_4.png
+!tool/Cắt Item/assets/hair_5.png
+!tool/Cắt Item/assets/face_side.png
+!tool/Cắt Item/assets/face_front.png

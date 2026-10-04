@@ -1,0 +1,37 @@
+TOOL GHÉP ẢNH PSD
+=================
+
+Chỉ chạy file:
+D:\Ghep-Anh\Auto-Cut\CHAY_GHEP_PSD.cmd
+
+Cách dùng:
+1. Nhập mã acc.
+2. Chọn mã súng DienLV.
+3. Bấm Quét ảnh và kiểm tra 3 ô: hồ sơ trái, hồ sơ giữa, sảnh phải.
+   Dùng Chọn... để thêm/đổi ảnh; dùng Bỏ để không ghép ô đó.
+   2 ảnh sẽ chia đôi như cũ; 3 ảnh chia ba; 1 ảnh chiếm toàn bộ chiều ngang.
+4. Bấm Xem trước bố cục nếu cần.
+5. Bấm Ghép PSD 1-CLICK.
+
+Ảnh nguồn:
+- D:\Ghep-Anh\Auto-Cut\Cắt\input
+- D:\Ghep-Anh\Auto-Cut\Cắt\output\<mã acc>
+- D:\Ghep-Anh\Auto-Cut\DienLV\standalone\<mã súng>\anhle
+
+Kết quả:
+D:\Ghep-Anh\Auto-Cut\GhepPSD\KetQua\<mã acc>
+
+PSD, PNG, ảnh xem trước và layout nằm trực tiếp trong thư mục mã acc. Ghép lại
+không ghi đè bản cũ: file mới có hậu tố _02, _03... trong cùng thư mục.
+Mở ô Mã súng DienLV hoặc bấm Làm mới để cập nhật mã mới mà không thoát tool.
+Form ít đồ mẫu 736 tự chọn khi acc có 1-6 ảnh đồ, tối đa 12 ảnh
+trang phục và không quá 55 ảnh con. Có thể chọn form khác bằng tay.
+Kích thước canvas trong form chỉ là mặc định; bố cục các vùng và thứ tự ảnh
+mới là điều được giữ theo PSD mẫu.
+Ảnh nguồn không bị sửa và không bị cắt nhỏ. Mỗi file nguồn là một Smart Object
+riêng trong danh sách layer phẳng; không tạo group cho các phần ảnh.
+
+Đổi đường dẫn khi chuyển máy:
+- Bấm CẤU HÌNH THƯ MỤC trong giao diện để sửa, chọn đường dẫn rồi LƯU & ÁP DỤNG.
+- Hoặc sửa D:\Ghep-Anh\Auto-Cut\GhepPSD\config.json bằng tay.
+- Đường dẫn tương đối được tính từ thư mục GhepPSD.

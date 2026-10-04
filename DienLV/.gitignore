@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Standalone build directory (excluded)
+standalone/
+DienLV.exe
+
+# Logs
+*.log
+main_exec.log
+
+# Test / Debug files
+test_*.py
+test_*.png
+test_*.txt
+check_*.py
+check_*.txt
+debug_*.py
+*.tmp
+
+# Working / Temporary directories
+anhle/
+bodem/
+anhrac/
+test_out/
+
+# Output directories (10-character hash folders)
+/[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/
+
+# Input images (keep directory via .gitkeep)
+input/*
+!input/.gitkeep
+
+# Ignore image and design files in root or outputs
+*.png
+*.jpg
+*.jpeg
+*.psd
+*.jsx
+*.zip
+
+# Allow required assets
+!assets/
+!assets/**

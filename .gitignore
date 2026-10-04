@@ -1,0 +1,69 @@
+# Python bytecode & cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Exclude DienLV standalone build folder as requested
+DienLV/standalone/
+**/standalone/
+*.exe
+
+# Exclude backup or IDE caches
+.code-review-graph/
+**/.code-review-graph/
+.git_backup/
+**/.git_backup/
+
+# Input / Output / Working folders (keep folder structure via .gitkeep)
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+**/input/*
+!**/input/.gitkeep
+**/output/*
+!**/output/.gitkeep
+anhle/
+**/anhle/
+bodem/
+**/bodem/
+anhrac/
+**/anhrac/
+test_out/
+**/test_out/
+GhepPSD/KetQua/*
+!GhepPSD/KetQua/.gitkeep
+GhepPSD/Temp/*
+!GhepPSD/Temp/.gitkeep
+
+# Ignore random 10-char output folders
+/[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/
+DienLV/[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]/
+
+# Ignore all media and binary archives by default
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+*.bmp
+*.BMP
+*.webp
+*.WEBP
+*.psd
+*.PSD
+*.zip
+*.ZIP
+
+# Unignore all required tool assets across all submodules
+!assets/
+!assets/**
+!**/assets/
+!**/assets/**

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "_huong_dan": "Đường dẫn tương đối được tính từ thư mục GhepPSD. Có thể sửa trực tiếp tại đây hoặc bằng cửa sổ Cấu hình trong tool.",
+  "paths": {
+    "source_project_root": "../Cắt",
+    "input_dir": "../Cắt/input",
+    "output_dir": "../Cắt/output",
+    "results_dir": "KetQua",
+    "temp_dir": "Temp",
+    "forms_dir": "forms",
+    "photoshop_script": "photoshop/photoshop_compose.jsx",
+    "photoshop_bridge": "photoshop/photoshop_bridge.ps1",
+    "label_library": "assets/1 cat chu.psd",
+    "dienlv_root": "D:/Ghep-Anh/Auto-Cut/Cắt/tool/Cắt Súng/output"
+  }
+}

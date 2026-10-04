@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "id": "classic_compact",
+  "label": "Gọn - giống mẫu 733 (3904 px)",
+  "canvas_width": 3904,
+  "minimum_bottom_height": 1500,
+  "background": [0, 0, 0],
+  "zone_ratios": {
+    "left": 0.36,
+    "outfits": 0.36,
+    "inventory": 0.28
+  },
+  "left": {
+    "gun_columns": 2,
+    "gun_width_ratio_with_rail": 0.66,
+    "car_columns_with_guns": 1,
+    "car_columns_without_guns": 2,
+    "small_columns_with_guns": 2,
+    "small_columns_without_guns": 4
+  },
+  "outfits": {
+    "columns": 4
+  },
+  "inventory": {
+    "columns": 2
+  },
+  "watermark": {
+    "enabled": true,
+    "font_size": 210,
+    "margin": 34
+  }
+}
