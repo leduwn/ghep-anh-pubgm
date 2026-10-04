@@ -135,3 +135,13 @@ def test_pipeline_ingest_folder(temp_workspace, sample_image_1080p, sample_image
         assert pipeline.metrics.sources_added == 2
         assert pipeline.metrics.sources_seen == 2
 
+
+
+
+def test_pipeline_default_uses_canonical_settings():
+    pipeline = AutoCutPipeline(settings=None)
+    # Must use canonical default settings with absolute workspace path
+    assert pipeline.settings is not None
+    assert pipeline.settings.workspace_dir.is_absolute()
+    assert pipeline.settings.classifier_accept_threshold == 0.85
+

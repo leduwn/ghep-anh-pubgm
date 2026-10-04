@@ -16,6 +16,8 @@ from .constants import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD,
     DEFAULT_CLASSIFIER_REVIEW_THRESHOLD,
+    DEFAULT_CLASSIFIER_AMBIGUITY_MARGIN,
+    DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION,
     DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD,
     DEFAULT_LOCK_THRESHOLD,
     DEFAULT_EMPTY_DETAIL_THRESHOLD,
@@ -44,6 +46,8 @@ class AutoCutSettings:
     # Classifier & Detector Thresholds
     classifier_accept_threshold: float = DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD
     classifier_review_threshold: float = DEFAULT_CLASSIFIER_REVIEW_THRESHOLD
+    classifier_ambiguity_margin: float = DEFAULT_CLASSIFIER_AMBIGUITY_MARGIN
+    classifier_scan_max_dimension: int = DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION
     detector_confidence_threshold: float = DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD
     lock_threshold: float = DEFAULT_LOCK_THRESHOLD
     empty_detail_threshold: float = DEFAULT_EMPTY_DETAIL_THRESHOLD
@@ -85,6 +89,10 @@ class AutoCutSettings:
                 raise ConfigurationError(f"{name} must be in [0.0, 1.0], got {val}.")
         if self.classifier_review_threshold > self.classifier_accept_threshold:
             raise ConfigurationError("classifier_review_threshold > classifier_accept_threshold.")
+        if not (0.0 <= self.classifier_ambiguity_margin <= 0.5):
+            raise ConfigurationError(f"classifier_ambiguity_margin must be in [0.0, 0.5], got {self.classifier_ambiguity_margin}.")
+        if not (400 <= self.classifier_scan_max_dimension <= 4000):
+            raise ConfigurationError(f"classifier_scan_max_dimension must be in [400, 4000], got {self.classifier_scan_max_dimension}.")
         if self.auto_color.lower() not in {"off", "preview", "photoshop"}:
             raise ConfigurationError(f"Invalid auto_color mode: '{self.auto_color}'.")
         if not (MIN_COLUMNS <= self.default_gun_columns <= MAX_COLUMNS):
@@ -104,6 +112,8 @@ class AutoCutSettings:
             "ocr_workers": self.ocr_workers,
             "classifier_accept_threshold": self.classifier_accept_threshold,
             "classifier_review_threshold": self.classifier_review_threshold,
+            "classifier_ambiguity_margin": self.classifier_ambiguity_margin,
+            "classifier_scan_max_dimension": self.classifier_scan_max_dimension,
             "detector_confidence_threshold": self.detector_confidence_threshold,
             "lock_threshold": self.lock_threshold,
             "empty_detail_threshold": self.empty_detail_threshold,
@@ -127,6 +137,8 @@ class AutoCutSettings:
             ocr_workers=int(data.get("ocr_workers", 1)),
             classifier_accept_threshold=float(data.get("classifier_accept_threshold", DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD)),
             classifier_review_threshold=float(data.get("classifier_review_threshold", DEFAULT_CLASSIFIER_REVIEW_THRESHOLD)),
+            classifier_ambiguity_margin=float(data.get("classifier_ambiguity_margin", DEFAULT_CLASSIFIER_AMBIGUITY_MARGIN)),
+            classifier_scan_max_dimension=int(data.get("classifier_scan_max_dimension", DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION)),
             detector_confidence_threshold=float(data.get("detector_confidence_threshold", DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD)),
             lock_threshold=float(data.get("lock_threshold", DEFAULT_LOCK_THRESHOLD)),
             empty_detail_threshold=float(data.get("empty_detail_threshold", DEFAULT_EMPTY_DETAIL_THRESHOLD)),

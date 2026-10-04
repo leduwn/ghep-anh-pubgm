@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Optional, Union
 
-from core.constants import Stage, SourceStatus
+import cv2
+import numpy as np
+
+from core.constants import Stage, SourceStatus, Decision, Category, CLASSIFIER_VERSION
+from core.cache import DiskCache, CacheKeyGenerator
 from core.ingest import ImageIngestor
 from core.logging import StageLogger
 from core.metrics import MetricsCollector
-from core.models import AccountSession, SourceImage
+from core.models import AccountSession, SourceImage, ClassificationResult
 from core.session import WorkspaceManager
 from core.settings import AutoCutSettings
+from detectors import ClassificationContext, ScreenClassifier
 
 
 class AutoCutPipeline:
@@ -25,7 +31,7 @@ class AutoCutPipeline:
         logger: Optional[StageLogger] = None,
         metrics: Optional[MetricsCollector] = None,
     ):
-        self.settings = settings or AutoCutSettings()
+        self.settings = settings if settings is not None else AutoCutSettings.load_default()
         self.workspace = workspace or WorkspaceManager(self.settings.workspace_dir)
         self.logger = logger or StageLogger(self.workspace.workspace_root / "logs")
         self.metrics = metrics or MetricsCollector()
@@ -141,3 +147,214 @@ class AutoCutPipeline:
 
         self.workspace.save_session(session)
         return session
+
+    def classify_session(
+        self,
+        account_id: str,
+        force: bool = False,
+    ) -> AccountSession:
+        """Runs screen classification engine on all successful sources for an account."""
+        session = self.get_or_create_session(account_id)
+        classifier = ScreenClassifier(
+            accept_threshold=self.settings.classifier_accept_threshold,
+            review_threshold=self.settings.classifier_review_threshold,
+            ambiguity_margin=self.settings.classifier_ambiguity_margin,
+        )
+        debug_dir = None
+        if self.settings.enable_debug:
+            account_dirs = self.workspace.init_account_workspace(account_id)
+            debug_dir = account_dirs["debug"] / "classification"
+            debug_dir.mkdir(parents=True, exist_ok=True)
+
+        disk_cache = DiskCache(self.workspace.workspace_root / "cache" / "classification")
+
+        successful_sources = sorted(
+            [s for s in session.sources.values() if s.status == SourceStatus.SUCCESS.value],
+            key=lambda s: s.source_index,
+        )
+
+        last_checkpoint_time = time.perf_counter()
+        sources_since_checkpoint = 0
+
+        with self.metrics.timer("classify"):
+            for source in successful_sources:
+                self.metrics.classify_seen += 1
+                source_path = Path(source.path)
+
+                # Compatible session result reuse
+                if not force and source.id in session.classifications:
+                    existing_res = session.classifications[source.id]
+                    if existing_res.detector_version == classifier.VERSION:
+                        self.metrics.classify_cached += 1
+                        self.metrics.sources_classified += 1
+                        if existing_res.decision == Decision.AUTO_ACCEPT.value:
+                            self.metrics.classify_auto += 1
+                        elif existing_res.decision == Decision.REVIEW.value:
+                            self.metrics.classify_review += 1
+                        elif existing_res.decision == Decision.UNKNOWN.value:
+                            self.metrics.classify_unknown += 1
+                        elif existing_res.decision == Decision.ERROR.value:
+                            self.metrics.classify_errors += 1
+                        continue
+
+                # Missing source file
+                if not source_path.is_file():
+                    err_msg = f"Source file missing: {source_path}"
+                    result = ClassificationResult(
+                        category=Category.OTHER.value,
+                        confidence=0.0,
+                        decision=Decision.ERROR.value,
+                        reasons=[err_msg],
+                        detector="screen_classifier",
+                        detector_version=classifier.VERSION,
+                        error_message=err_msg,
+                    )
+                    session.classifications[source.id] = result
+                    session.touch()
+                    self.metrics.classify_errors += 1
+                    self.logger.error(
+                        f"Missing source file: {source.filename}",
+                        stage=Stage.CLASSIFY,
+                        account=account_id,
+                        source=source.filename,
+                        status="ERROR",
+                    )
+                    continue
+
+                # Disk cache lookup
+                cache_key = CacheKeyGenerator.generate(
+                    image_sha256=source.sha256,
+                    crop_rect=None,
+                    subsystem_version=classifier.VERSION,
+                    route=f"classify:a{self.settings.classifier_accept_threshold}:r{self.settings.classifier_review_threshold}:m{self.settings.classifier_ambiguity_margin}",
+                )
+
+                cached_data = disk_cache.get(cache_key) if not force else None
+                if cached_data is not None:
+                    result = ClassificationResult.from_dict(cached_data)
+                    session.classifications[source.id] = result
+                    session.touch()
+                    self.metrics.classify_cached += 1
+                    self.metrics.sources_classified += 1
+                    if result.decision == Decision.AUTO_ACCEPT.value:
+                        self.metrics.classify_auto += 1
+                    elif result.decision == Decision.REVIEW.value:
+                        self.metrics.classify_review += 1
+                    elif result.decision == Decision.UNKNOWN.value:
+                        self.metrics.classify_unknown += 1
+                    continue
+                # Decode image safely
+                t_decode_0 = time.perf_counter()
+                try:
+                    img_bytes = source_path.read_bytes()
+                    nparr = np.frombuffer(img_bytes, np.uint8)
+                    img_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                except Exception as exc:
+                    img_bgr = None
+                    decode_err = str(exc)
+                else:
+                    decode_err = "Decode returned None" if img_bgr is None else ""
+
+                t_decode_ms = (time.perf_counter() - t_decode_0) * 1000.0
+
+                if img_bgr is None or img_bgr.size == 0:
+                    err_msg = f"Failed to decode source image: {decode_err}"
+                    result = ClassificationResult(
+                        category=Category.OTHER.value,
+                        confidence=0.0,
+                        decision=Decision.ERROR.value,
+                        reasons=[err_msg],
+                        detector="screen_classifier",
+                        detector_version=classifier.VERSION,
+                        duration_ms=t_decode_ms,
+                        error_message=err_msg,
+                    )
+                    session.classifications[source.id] = result
+                    session.touch()
+                    self.metrics.classify_errors += 1
+                    self.logger.error(
+                        f"Corrupt/undecodable source image: {source.filename}",
+                        stage=Stage.CLASSIFY,
+                        account=account_id,
+                        source=source.filename,
+                        status="ERROR",
+                    )
+                    continue
+
+                # Context & Classification
+                ctx = ClassificationContext(
+                    img_bgr,
+                    max_scan_dim=self.settings.classifier_scan_max_dimension,
+                    source=source,
+                )
+                try:
+                    result = classifier.classify(ctx)
+                except Exception as exc:
+                    err_msg = f"Classification exception: {exc}"
+                    result = ClassificationResult(
+                        category=Category.OTHER.value,
+                        confidence=0.0,
+                        decision=Decision.ERROR.value,
+                        reasons=[err_msg],
+                        detector="screen_classifier",
+                        detector_version=classifier.VERSION,
+                        error_message=err_msg,
+                    )
+                    self.metrics.classify_errors += 1
+                    self.logger.error(
+                        f"Classification failure on {source.filename}: {exc}",
+                        stage=Stage.CLASSIFY,
+                        account=account_id,
+                        source=source.filename,
+                        status="ERROR",
+                    )
+                finally:
+                    ctx.close()
+
+                if result.decision != Decision.ERROR.value:
+                    try:
+                        disk_cache.put(cache_key, result.to_dict())
+                    except Exception:
+                        pass
+
+                if debug_dir:
+                    diag_path = debug_dir / f"{source.id}.json"
+                    try:
+                        with open(diag_path, "w", encoding="utf-8") as f:
+                            json.dump(result.to_dict(), f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+
+                session.classifications[source.id] = result
+                session.touch()
+
+                self.metrics.classify_processed += 1
+                self.metrics.sources_classified += 1
+                if result.decision == Decision.AUTO_ACCEPT.value:
+                    self.metrics.classify_auto += 1
+                elif result.decision == Decision.REVIEW.value:
+                    self.metrics.classify_review += 1
+                elif result.decision == Decision.UNKNOWN.value:
+                    self.metrics.classify_unknown += 1
+
+                alt_desc = f", alt={result.alternatives[0]['category']} ({result.alternatives[0]['score']})" if (result.decision == Decision.REVIEW.value and result.alternatives) else ""
+                self.logger.info(
+                    f"category={result.category} confidence={result.confidence:.2f} decision={result.decision}{alt_desc}",
+                    stage=Stage.CLASSIFY,
+                    account=account_id,
+                    source=source.filename,
+                    status=result.decision,
+                    duration_ms=result.duration_ms,
+                )
+
+                sources_since_checkpoint += 1
+                now = time.perf_counter()
+                if sources_since_checkpoint >= 10 or (now - last_checkpoint_time) >= 2.0:
+                    self.workspace.save_session(session)
+                    last_checkpoint_time = now
+                    sources_since_checkpoint = 0
+
+        self.workspace.save_session(session)
+        return session
+
+

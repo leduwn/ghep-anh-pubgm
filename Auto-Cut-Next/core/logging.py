@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -28,7 +29,11 @@ class StageFormatter(logging.Formatter):
 
 
 class StageLogger:
-    """Manages application-wide and account-specific logging with file rotation."""
+    """Manages application-wide and account-specific logging with file rotation and ref-counted handlers."""
+
+    _REGISTRY_LOCK = threading.RLock()
+    _PATH_REFCOUNT: dict[Path, int] = {}
+    _PATH_HANDLERS: dict[Path, list[logging.Handler]] = {}
 
     def __init__(
         self,
@@ -42,43 +47,60 @@ class StageLogger:
         self.log_dir = Path(log_dir) if log_dir else DEFAULT_WORKSPACE_DIR / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.log_dir / log_filename
+        resolved_path = self.log_path.resolve()
+        self._resolved_path = resolved_path
+        self._closed = False
 
         # Unique logger identity per resolved log path to avoid multi-workspace collisions
-        logger_id = hashlib.sha1(str(self.log_path.resolve()).encode("utf-8")).hexdigest()[:12]
+        logger_id = hashlib.sha1(str(resolved_path).encode("utf-8")).hexdigest()[:12]
         self.logger = logging.getLogger(f"AutoCutNext.{logger_id}")
         self.logger.setLevel(level)
         self.logger.propagate = False
-        self._handlers: list[logging.Handler] = []
 
-        if not self.logger.handlers:
-            file_handler = RotatingFileHandler(
-                self.log_path,
-                maxBytes=max_bytes,
-                backupCount=backup_count,
-                encoding="utf-8",
-            )
-            file_handler.setFormatter(StageFormatter())
-            self.logger.addHandler(file_handler)
-            self._handlers.append(file_handler)
+        with self._REGISTRY_LOCK:
+            self._PATH_REFCOUNT[resolved_path] = self._PATH_REFCOUNT.get(resolved_path, 0) + 1
 
-            if console:
-                console_handler = logging.StreamHandler()
-                console_handler.setFormatter(StageFormatter())
-                self.logger.addHandler(console_handler)
-                self._handlers.append(console_handler)
-        else:
-            self._handlers = list(self.logger.handlers)
+            if resolved_path not in self._PATH_HANDLERS:
+                handlers: list[logging.Handler] = []
+                file_handler = RotatingFileHandler(
+                    self.log_path,
+                    maxBytes=max_bytes,
+                    backupCount=backup_count,
+                    encoding="utf-8",
+                )
+                file_handler.setFormatter(StageFormatter())
+                self.logger.addHandler(file_handler)
+                handlers.append(file_handler)
+
+                if console:
+                    console_handler = logging.StreamHandler()
+                    console_handler.setFormatter(StageFormatter())
+                    self.logger.addHandler(console_handler)
+                    handlers.append(console_handler)
+
+                self._PATH_HANDLERS[resolved_path] = handlers
 
     def close(self) -> None:
-        """Flushes, closes and detaches all handlers owned by this logger instance."""
-        for h in list(self._handlers):
-            try:
-                h.flush()
-                h.close()
-            except Exception:
-                pass
-            self.logger.removeHandler(h)
-        self._handlers.clear()
+        """Decrements refcount; closes and detaches handlers only when no active logger instances remain."""
+        with self._REGISTRY_LOCK:
+            if getattr(self, "_closed", False):
+                return
+            self._closed = True
+            resolved_path = getattr(self, "_resolved_path", None)
+            if not resolved_path or resolved_path not in self._PATH_REFCOUNT:
+                return
+
+            self._PATH_REFCOUNT[resolved_path] -= 1
+            if self._PATH_REFCOUNT[resolved_path] <= 0:
+                handlers = self._PATH_HANDLERS.pop(resolved_path, [])
+                for h in handlers:
+                    try:
+                        h.flush()
+                        h.close()
+                    except Exception:
+                        pass
+                    self.logger.removeHandler(h)
+                self._PATH_REFCOUNT.pop(resolved_path, None)
 
     def __enter__(self) -> "StageLogger":
         return self

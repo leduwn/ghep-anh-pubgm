@@ -88,9 +88,19 @@ python Auto-Cut-Next/run.py --self-test
 python Auto-Cut-Next/run.py ingest <ACCOUNT_ID> <PATH_TO_SCREENSHOT_FOLDER>
 ```
 
+### Classifying Screenshot Screens:
+```bash
+python Auto-Cut-Next/run.py classify <ACCOUNT_ID> [--force] [--json]
+```
+
 ### Viewing Account Session Info:
 ```bash
 python Auto-Cut-Next/run.py info <ACCOUNT_ID>
+```
+
+### Running Benchmark:
+```bash
+python Auto-Cut-Next/scripts/benchmark_classifier.py
 ```
 
 ### Running Test Suite:
@@ -100,8 +110,15 @@ python -m pytest Auto-Cut-Next/tests -v
 
 ## 6. Milestone Status
 
-- **Milestone 1 — Foundation**: Completed (Models, Settings, Logging, Caching, Ingest, Atomic Session, CLI Self-Test, 34/34 tests passing).
-- **Milestone 2 — Classification**: Planned.
+- **Milestone 1 — Foundation**: Completed (Models, Settings, Logging, Caching, Ingest, Atomic Session, CLI Self-Test).
+- **Milestone 2 — Robust Screen Classification Engine**: Completed.
+  - `ClassificationContext`: Single decode, scan downscaling (1600 px max), lazy cached gray/hsv/masks, clamped ROI slicing.
+  - Signal System: Strict/relaxed vertical blue indicators, Gun Lab anchors (header, orange badge, dark center), wardrobe layout rhythm and subtab rail smoothness, backpack 3-level selector, item detail popup frame, accessory separators and emote silhouettes, supercar template matching and lobby anchors.
+  - Canonical Category Mapping: 12 standard categories (`GUN`, `VEHICLE`, `OUTFIT`, `ITEM_SET`, `HELMET`, `BACKPACK`, `MASK`, `GRENADE`, `PARACHUTE`, `EMOTE`, `MISC`, `OTHER`).
+  - Strict Rules: Normal gun inventory tab is NEVER classified as GUN (only Gun Lab); Backpack requires 3-level selector; Item Set requires detail popup frame.
+  - Decision Policy: `AUTO_ACCEPT` (score >= 0.85), `REVIEW` (0.55 <= score < 0.85 or ambiguity margin < 0.10), `UNKNOWN` (score < 0.55), `ERROR`.
+  - Session Persistence: Results stored directly under `session.classifications`, versioned (`CLASSIFIER_VERSION = 2.0.0`), invalidated upon force ingest.
+  - Microbenchmark: ~25 ms classify compute / ~38 ms end-to-end per 1080p source.
 - **Milestone 3 — Detector Core**: Planned.
 - **Milestone 4 — Specialized Detectors**: Planned.
 - **Milestone 5 — Cascade OCR**: Planned.

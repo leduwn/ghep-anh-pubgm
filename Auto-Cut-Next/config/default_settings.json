@@ -6,6 +6,8 @@
   "ocr_workers": 1,
   "classifier_accept_threshold": 0.85,
   "classifier_review_threshold": 0.55,
+  "classifier_ambiguity_margin": 0.1,
+  "classifier_scan_max_dimension": 1600,
   "detector_confidence_threshold": 0.6,
   "lock_threshold": 0.5,
   "empty_detail_threshold": 0.15,

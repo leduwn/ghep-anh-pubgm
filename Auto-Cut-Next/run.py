@@ -20,15 +20,15 @@ from app.pipeline import AutoCutPipeline
 
 
 def run_self_test() -> int:
-    """Verifies environment, imports, models, settings, atomic session, cache, and logger isolation."""
+    """Verifies environment, imports, models, settings, atomic session, cache, logger, and classifier smoke test."""
     print("=" * 60)
-    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 1.1)")
+    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 2)")
     print("=" * 60)
 
     import tempfile
 
     # 1. Imports
-    print("[1/6] Checking core imports...")
+    print("[1/7] Checking core imports...")
     try:
         from core.models import SourceImage, Rect, DetectedAsset, AccountSession
         from core.ingest import ImageIngestor
@@ -40,7 +40,7 @@ def run_self_test() -> int:
         return 1
 
     # 2. Settings validation & canonical default loading
-    print("[2/6] Validating settings & canonical default...")
+    print("[2/7] Validating settings & canonical default...")
     try:
         settings = AutoCutSettings.load_default()
         settings.validate()
@@ -53,7 +53,7 @@ def run_self_test() -> int:
         return 1
 
     # 3. Workspace atomic session write
-    print("[3/6] Testing atomic workspace session write & schema check...")
+    print("[3/7] Testing atomic workspace session write & schema check...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             ws = WorkspaceManager(temp_dir)
@@ -69,7 +69,7 @@ def run_self_test() -> int:
         return 1
 
     # 4. Ingestor & Sandbox enforcement
-    print("[4/6] Checking ingestor & sandbox traversal protection...")
+    print("[4/7] Checking ingestor & sandbox traversal protection...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -92,7 +92,7 @@ def run_self_test() -> int:
         return 1
 
     # 5. Atomic DiskCache & corruption recovery
-    print("[5/6] Testing atomic disk cache & corruption recovery...")
+    print("[5/7] Testing atomic disk cache & corruption recovery...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = DiskCache(temp_dir)
@@ -110,7 +110,7 @@ def run_self_test() -> int:
         return 1
 
     # 6. Logger isolation & lifecycle
-    print("[6/6] Testing logger instance isolation & cleanup...")
+    print("[6/7] Testing logger instance isolation & cleanup...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -135,8 +135,27 @@ def run_self_test() -> int:
         print(f"      FAIL: Logger isolation error: {exc}")
         return 1
 
+    # 7. Classifier smoke test
+    print("[7/7] Testing screen classifier initialization & smoke categorization...")
+    try:
+        import numpy as np
+        from core.constants import Category, Decision
+        from detectors import ClassificationContext, ScreenClassifier
+        dummy_img = np.zeros((720, 1280, 3), dtype=np.uint8)
+        ctx = ClassificationContext(dummy_img)
+        classifier = ScreenClassifier()
+        res = classifier.classify(ctx)
+        ctx.close()
+        assert res.category in {c.value for c in Category}
+        assert res.decision in {d.value for d in Decision}
+        assert res.detector_version == ScreenClassifier.VERSION
+        print(f"      PASS: Classifier smoke test passed (category={res.category}, decision={res.decision}).")
+    except Exception as exc:
+        print(f"      FAIL: Classifier smoke test error: {exc}")
+        return 1
+
     print("=" * 60)
-    print("      ALL 6 SELF-TESTS PASSED SUCCESSFULLY!")
+    print("      ALL 7 SELF-TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
     return 0
 
@@ -155,6 +174,13 @@ def main() -> int:
     ingest_p.add_argument("account", help="Account identifier (letters, digits, dashes)")
     ingest_p.add_argument("folder", help="Path to screenshot folder")
     ingest_p.add_argument("--force", action="store_true", help="Force reprocess duplicate sources")
+
+    # Command: classify
+    classify_p = subparsers.add_parser("classify", help="Classify screenshot screens for an account")
+    classify_p.add_argument("account", help="Account identifier")
+    classify_p.add_argument("--force", action="store_true", help="Force reclassification of sources")
+    classify_p.add_argument("--verbose", action="store_true", help="Verbose logging")
+    classify_p.add_argument("--json", action="store_true", dest="json_output", help="Output summary as JSON")
 
     # Command: info
     info_p = subparsers.add_parser("info", help="Display account session summary")
@@ -177,19 +203,97 @@ def main() -> int:
         print(pipeline.metrics.summary())
         return 0
 
+    if args.command == "classify":
+        import json
+        import time
+        from core.constants import Category, Decision
+
+        ws = WorkspaceManager()
+        if not ws.session_exists(args.account):
+            print(f"Error: No session found for account '{args.account}'. Run ingest first.", file=sys.stderr)
+            return 1
+
+        pipeline = AutoCutPipeline()
+        t0 = time.perf_counter()
+        session = pipeline.classify_session(args.account, force=args.force)
+        elapsed = time.perf_counter() - t0
+
+        # Tally categories
+        cat_counts = {cat.value: 0 for cat in Category}
+        decision_counts = {
+            "AUTO": 0,
+            "REVIEW": 0,
+            "UNKNOWN": 0,
+            "ERROR": 0,
+        }
+
+        for res in session.classifications.values():
+            if res.category in cat_counts:
+                cat_counts[res.category] += 1
+            else:
+                cat_counts["OTHER"] += 1
+
+            if res.decision == Decision.AUTO_ACCEPT.value:
+                decision_counts["AUTO"] += 1
+            elif res.decision == Decision.REVIEW.value:
+                decision_counts["REVIEW"] += 1
+            elif res.decision == Decision.UNKNOWN.value:
+                decision_counts["UNKNOWN"] += 1
+            elif res.decision == Decision.ERROR.value:
+                decision_counts["ERROR"] += 1
+
+        if args.json_output:
+            data = {
+                "account": args.account,
+                "sources": len(session.sources),
+                "classified": len(session.classifications),
+                "categories": cat_counts,
+                "decisions": decision_counts,
+                "cache_hits": pipeline.metrics.classify_cached,
+                "time_seconds": round(elapsed, 2),
+            }
+            print(json.dumps(data, indent=2))
+            return 0
+
+        print(f"Account: {args.account}")
+        print(f"Sources: {len(session.sources)}\n")
+        for cat in Category:
+            print(f"{cat.value:<12} {cat_counts.get(cat.value, 0):>3}")
+        print()
+        print(f"AUTO:       {decision_counts['AUTO']:>3}")
+        print(f"REVIEW:     {decision_counts['REVIEW']:>3}")
+        print(f"UNKNOWN:    {decision_counts['UNKNOWN']:>3}")
+        print(f"ERROR:      {decision_counts['ERROR']:>3}")
+        print()
+        print(f"Cache hits: {pipeline.metrics.classify_cached}")
+        print(f"Time: {elapsed:.2f} s")
+        return 0
+
     if args.command == "info":
+        from core.constants import Decision
         ws = WorkspaceManager()
         if not ws.session_exists(args.account):
             print(f"Error: No session found for account '{args.account}'", file=sys.stderr)
             return 1
         session = ws.load_session(args.account)
-        print(f"Account:   {session.account_id}")
-        print(f"Version:   {session.version}")
-        print(f"Sources:   {len(session.sources)}")
-        print(f"Assets:    {len(session.assets)}")
-        print(f"UID:       {session.uid or 'N/A'}")
-        print(f"Created:   {session.created_at}")
-        print(f"Updated:   {session.updated_at}")
+
+        auto_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.AUTO_ACCEPT.value)
+        rev_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.REVIEW.value)
+        unk_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.UNKNOWN.value)
+        err_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.ERROR.value)
+
+        print(f"Account:    {session.account_id}")
+        print(f"Version:    {session.version}")
+        print(f"Sources:    {len(session.sources)}")
+        print(f"Classified: {len(session.classifications)}")
+        print(f"Auto:       {auto_cnt}")
+        print(f"Review:     {rev_cnt}")
+        print(f"Unknown:    {unk_cnt}")
+        print(f"Errors:     {err_cnt}")
+        print(f"Assets:     {len(session.assets)}")
+        print(f"UID:        {session.uid or 'N/A'}")
+        print(f"Created:    {session.created_at}")
+        print(f"Updated:    {session.updated_at}")
         return 0
 
     parser.print_help()

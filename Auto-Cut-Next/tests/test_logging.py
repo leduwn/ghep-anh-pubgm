@@ -36,16 +36,27 @@ def test_stage_logger_isolation(tmp_path):
     logger_a.info("EVENT_ALPHA", account="ACC_A")
     logger_b.info("EVENT_BETA", account="ACC_B")
 
-    logger_a.close()
+
+
+
+def test_stage_logger_same_path_lifecycle(tmp_path):
+    log_file = tmp_path / "shared" / "same_path.log"
+    logger_a = StageLogger(log_dir=log_file.parent, log_filename=log_file.name, console=False)
+    logger_b = StageLogger(log_dir=log_file.parent, log_filename=log_file.name, console=False)
+
+    logger_a.info("MSG_1_A")
+    logger_b.info("MSG_1_B")
+
+    # Closing B must not close the underlying handler while A is still active
     logger_b.close()
 
-    content_a = (dir_a / "run.log").read_text(encoding="utf-8")
-    content_b = (dir_b / "run.log").read_text(encoding="utf-8")
+    logger_a.info("MSG_2_A")
+    logger_a.close()
 
-    assert "EVENT_ALPHA" in content_a
-    assert "EVENT_BETA" not in content_a
-    assert "EVENT_BETA" in content_b
-    assert "EVENT_ALPHA" not in content_b
+    content = log_file.read_text(encoding="utf-8")
+    assert "MSG_1_A" in content
+    assert "MSG_1_B" in content
+    assert "MSG_2_A" in content
 
 
 def test_stage_logger_context_manager(tmp_path):

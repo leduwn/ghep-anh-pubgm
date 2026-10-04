@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from .constants import (
     Category,
+    Decision,
     SourceStatus,
     SESSION_SCHEMA_VERSION,
     CLASSIFIER_VERSION,
@@ -144,11 +145,20 @@ class ClassificationResult:
     """Detailed result of screen categorization."""
     category: str
     confidence: float
+    decision: str = Decision.AUTO_ACCEPT.value
     reasons: list[str] = field(default_factory=list)
     detector: str = "screen_classifier"
+    detector_version: str = CLASSIFIER_VERSION
+    signals: dict[str, float] = field(default_factory=dict)
+    candidate_category: Optional[str] = None
+    alternatives: list[dict[str, Any]] = field(default_factory=list)
+    duration_ms: float = 0.0
+    error_message: Optional[str] = None
 
     def __post_init__(self):
         self.confidence = validate_confidence(self.confidence, "confidence")
+        if self.decision not in {d.value for d in Decision}:
+            self.decision = Decision.AUTO_ACCEPT.value
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -158,8 +168,15 @@ class ClassificationResult:
         return cls(
             category=str(data.get("category", Category.OTHER.value)),
             confidence=float(data.get("confidence", 0.0)),
+            decision=str(data.get("decision", Decision.AUTO_ACCEPT.value)),
             reasons=list(data.get("reasons", [])),
             detector=str(data.get("detector", "screen_classifier")),
+            detector_version=str(data.get("detector_version", CLASSIFIER_VERSION)),
+            signals=dict(data.get("signals", {})),
+            candidate_category=data.get("candidate_category"),
+            alternatives=list(data.get("alternatives", [])),
+            duration_ms=float(data.get("duration_ms", 0.0)),
+            error_message=data.get("error_message"),
         )
 
 
@@ -311,6 +328,7 @@ class AccountSession:
     updated_at: str = field(default_factory=_utc_now_iso)
     sources: dict[str, SourceImage] = field(default_factory=dict)
     assets: list[DetectedAsset] = field(default_factory=list)
+    classifications: dict[str, ClassificationResult] = field(default_factory=dict)
     uid: Optional[str] = None
     uid_confidence: float = 0.0
     layout_settings: dict[str, Any] = field(default_factory=dict)
@@ -367,9 +385,18 @@ class AccountSession:
         existing.status = source.status
         existing.error_message = source.error_message
 
+        self.invalidate_classification(existing.id)
         self.invalidate_source_products(existing.id)
         self.touch()
         return existing, True
+
+    def invalidate_classification(self, source_id: str) -> bool:
+        """Invalidates and removes classification for source_id."""
+        if source_id in self.classifications:
+            del self.classifications[source_id]
+            self.touch()
+            return True
+        return False
 
     def add_source(self, source: SourceImage) -> bool:
         """Add source image if SHA-256 not already present. Returns True if added."""
@@ -432,6 +459,7 @@ class AccountSession:
             "updated_at": self.updated_at,
             "sources": {k: v.to_dict() for k, v in self.sources.items()},
             "assets": [a.to_dict() for a in self.assets],
+            "classifications": {k: v.to_dict() for k, v in self.classifications.items()},
             "uid": self.uid,
             "uid_confidence": self.uid_confidence,
             "layout_settings": self.layout_settings,
@@ -451,6 +479,9 @@ class AccountSession:
         assets_raw = data.get("assets", [])
         assets = [DetectedAsset.from_dict(a) for a in assets_raw]
 
+        classifications_raw = data.get("classifications", {})
+        classifications = {k: ClassificationResult.from_dict(v) for k, v in classifications_raw.items()}
+
         return cls(
             account_id=str(data["account_id"]),
             version=int(data.get("version", SESSION_SCHEMA_VERSION)),
@@ -458,6 +489,7 @@ class AccountSession:
             updated_at=str(data.get("updated_at", _utc_now_iso())),
             sources=sources,
             assets=assets,
+            classifications=classifications,
             uid=data.get("uid"),
             uid_confidence=float(data.get("uid_confidence", 0.0)),
             layout_settings=dict(data.get("layout_settings", {})),

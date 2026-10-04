@@ -17,6 +17,14 @@ class MetricsCollector:
     sources_forced: int = 0
     sources_failed: int = 0
 
+    classify_seen: int = 0
+    classify_cached: int = 0
+    classify_processed: int = 0
+    classify_auto: int = 0
+    classify_review: int = 0
+    classify_unknown: int = 0
+    classify_errors: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0
@@ -69,7 +77,12 @@ class MetricsCollector:
             f"Sources Forced:     {self.sources_forced}",
             f"Sources Failed:     {self.sources_failed}",
             f"Classified:         {self.sources_classified}",
-            f"Unknown:            {self.sources_unknown}",
+            f"Classify Processed: {self.classify_processed}",
+            f"Classify Cached:    {self.classify_cached}",
+            f"Classify Auto:      {self.classify_auto}",
+            f"Classify Review:    {self.classify_review}",
+            f"Classify Unknown:   {self.classify_unknown}",
+            f"Classify Errors:    {self.classify_errors}",
             f"Assets Detected:    {self.assets_detected}",
             f"Locked Skipped:     {self.locked_skipped}",
             f"Partial Skipped:    {self.partial_skipped}",
