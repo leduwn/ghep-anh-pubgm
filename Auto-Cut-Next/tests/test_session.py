@@ -1,5 +1,6 @@
 """Unit tests for workspace management, atomic session persistence, and pipeline."""
 
+from pathlib import Path
 import pytest
 from core.constants import SESSION_SCHEMA_VERSION, SourceStatus
 from core.exceptions import SessionIncompatibleError
@@ -69,3 +70,68 @@ def test_workspace_list_accounts(temp_workspace):
     ws.save_session(AccountSession("ACC_A"))
 
     assert ws.list_accounts() == ["ACC_A", "ACC_B"]
+
+
+
+def test_session_incompatible_older_version(temp_workspace):
+    ws = WorkspaceManager(temp_workspace)
+    session = AccountSession(account_id="ACC_OLD")
+    ws.save_session(session)
+
+    # Change schema version to 0
+    session_file = ws.get_session_path("ACC_OLD")
+    content = session_file.read_text(encoding="utf-8")
+    old_content = content.replace(f'"version": {SESSION_SCHEMA_VERSION}', '"version": 0')
+    session_file.write_text(old_content, encoding="utf-8")
+
+    with pytest.raises(SessionIncompatibleError):
+        ws.load_session("ACC_OLD")
+
+
+def test_force_reprocess_invalidates_derived_assets(temp_workspace, sample_image_1080p):
+    ws = WorkspaceManager(temp_workspace)
+    pipeline = AutoCutPipeline(workspace=ws)
+
+    # Ingest source A
+    session = pipeline.ingest_sources("ACC_FORCE", [sample_image_1080p])
+    assert len(session.sources) == 1
+    src_id = list(session.sources.keys())[0]
+
+    # Add simulated derived asset
+    from core.models import DetectedAsset, Rect
+    asset = DetectedAsset("a1", src_id, "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0")
+    session.add_asset(asset)
+    ws.save_session(session)
+    assert len(session.assets) == 1
+
+    # Ingest without force -> asset preserved, duplicate skipped
+    pipeline2 = AutoCutPipeline(workspace=ws)
+    s2 = pipeline2.ingest_sources("ACC_FORCE", [sample_image_1080p], force_reprocess=False)
+    assert len(s2.sources) == 1
+    assert len(s2.assets) == 1
+    assert pipeline2.metrics.sources_duplicates == 1
+
+    # Ingest WITH force -> source refreshed, duplicate NOT added, derived asset invalidated!
+    pipeline3 = AutoCutPipeline(workspace=ws)
+    s3 = pipeline3.ingest_sources("ACC_FORCE", [sample_image_1080p], force_reprocess=True)
+    assert len(s3.sources) == 1
+    assert len(s3.assets) == 0  # Invalidated!
+    assert pipeline3.metrics.sources_forced == 1
+    assert pipeline3.metrics.sources_added == 0
+
+
+def test_pipeline_ingest_folder(temp_workspace, sample_image_1080p, sample_image_pubg):
+    ws = WorkspaceManager(temp_workspace)
+    pipeline = AutoCutPipeline(workspace=ws)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        folder = Path(td)
+        (folder / "img1.png").write_bytes(sample_image_1080p.read_bytes())
+        (folder / "img2.png").write_bytes(sample_image_pubg.read_bytes())
+
+        session = pipeline.ingest_folder("ACC_FOLDER", folder)
+        assert len(session.sources) == 2
+        assert pipeline.metrics.sources_added == 2
+        assert pipeline.metrics.sources_seen == 2
+

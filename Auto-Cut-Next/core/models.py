@@ -16,6 +16,7 @@ from .constants import (
     MISC_GRID_VERSION,
     OCR_VERSION,
     LAYOUT_VERSION,
+    validate_confidence,
 )
 from .exceptions import SessionCorruptError
 
@@ -51,6 +52,21 @@ class Rect:
     @property
     def aspect_ratio(self) -> float:
         return float(self.w) / float(self.h) if self.h > 0 else 0.0
+
+    @property
+    def is_empty(self) -> bool:
+        return self.w == 0 or self.h == 0
+
+    @property
+    def is_valid_crop(self) -> bool:
+        return self.w > 0 and self.h > 0
+
+    def clamp(self, max_w: int, max_h: int) -> "Rect":
+        cx = max(0, min(self.x, max_w))
+        cy = max(0, min(self.y, max_h))
+        cw = max(0, min(self.w, max_w - cx))
+        ch = max(0, min(self.h, max_h - cy))
+        return Rect(cx, cy, cw, ch)
 
     def intersection(self, other: "Rect") -> Optional["Rect"]:
         ix1 = max(self.x, other.x)
@@ -131,6 +147,9 @@ class ClassificationResult:
     reasons: list[str] = field(default_factory=list)
     detector: str = "screen_classifier"
 
+    def __post_init__(self):
+        self.confidence = validate_confidence(self.confidence, "confidence")
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -155,6 +174,9 @@ class GunMetadata:
     ocr_confidence: float = 0.0
     level_manual: Optional[int] = None
     name_manual: Optional[str] = None
+
+    def __post_init__(self):
+        self.ocr_confidence = validate_confidence(self.ocr_confidence, "ocr_confidence")
 
     @property
     def effective_level(self) -> Optional[int]:
@@ -245,6 +267,9 @@ class DetectedAsset:
     review_reasons: list[str] = field(default_factory=list)
     order: int = 0
 
+    def __post_init__(self):
+        self.confidence = validate_confidence(self.confidence, "confidence")
+
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["crop_rect"] = self.crop_rect.to_dict()
@@ -297,36 +322,97 @@ class AccountSession:
         "layout": LAYOUT_VERSION,
     })
     ocr_version: str = OCR_VERSION
+    _sha256_to_id: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self):
+        self.uid_confidence = validate_confidence(self.uid_confidence, "uid_confidence")
+        self._rebuild_sha256_index()
+
+    def _rebuild_sha256_index(self) -> None:
+        self._sha256_to_id = {src.sha256: src.id for src in self.sources.values() if src.sha256}
 
     def touch(self) -> None:
         self.updated_at = _utc_now_iso()
 
+    def upsert_source(self, source: SourceImage, force: bool = False) -> tuple[SourceImage, bool]:
+        """Adds a new source or refreshes an existing source when force=True.
+
+        Returns:
+            tuple[SourceImage, bool]: (source_instance, is_affected)
+            is_affected is True if the source was freshly added or forced/refreshed;
+            False if it was skipped as an existing duplicate.
+        """
+        existing_id = self._sha256_to_id.get(source.sha256)
+        if existing_id is None:
+            # Check for ID collision with differing full SHA-256
+            if source.id in self.sources and self.sources[source.id].sha256 != source.sha256:
+                source.id = source.sha256[:24]
+
+            self.sources[source.id] = source
+            if source.sha256:
+                self._sha256_to_id[source.sha256] = source.id
+            self.touch()
+            return source, True
+
+        existing = self.sources[existing_id]
+        if not force:
+            return existing, False
+
+        # Force reprocess: refresh source metadata and invalidate derived products
+        existing.path = source.path
+        existing.filename = source.filename
+        existing.mtime = source.mtime
+        existing.width = source.width
+        existing.height = source.height
+        existing.status = source.status
+        existing.error_message = source.error_message
+
+        self.invalidate_source_products(existing.id)
+        self.touch()
+        return existing, True
+
     def add_source(self, source: SourceImage) -> bool:
         """Add source image if SHA-256 not already present. Returns True if added."""
-        for existing in self.sources.values():
-            if existing.sha256 == source.sha256:
-                return False
-        self.sources[source.id] = source
-        self.touch()
-        return True
+        _, is_new = self.upsert_source(source, force=False)
+        return is_new
 
     def get_source_by_sha256(self, sha256_hash: str) -> Optional[SourceImage]:
-        for src in self.sources.values():
-            if src.sha256 == sha256_hash:
-                return src
+        src_id = self._sha256_to_id.get(sha256_hash)
+        if src_id and src_id in self.sources:
+            return self.sources[src_id]
         return None
+
+    def invalidate_source_products(self, source_id: str) -> int:
+        """Invalidates and removes all downstream detected assets derived from source_id."""
+        initial_count = len(self.assets)
+        self.assets = [a for a in self.assets if a.source_id != source_id]
+        removed = initial_count - len(self.assets)
+        if removed > 0:
+            self.touch()
+        return removed
+
+    def remove_assets_for_source(self, source_id: str) -> int:
+        """Alias for invalidate_source_products."""
+        return self.invalidate_source_products(source_id)
 
     def add_asset(self, asset: DetectedAsset) -> None:
         self.assets.append(asset)
         self.touch()
 
-    def get_assets_by_category(self, category: str) -> list[DetectedAsset]:
+    def get_assets_by_category(self, category: str, include_filtered: bool = True) -> list[DetectedAsset]:
+        """Returns assets in a given category, optionally including locked/empty/partial items."""
         target = category.upper()
+        if include_filtered:
+            return [a for a in self.assets if a.category.upper() == target]
         return [
             a for a in self.assets
             if a.category.upper() == target
             and not a.locked and not a.empty and not a.partial and not a.duplicate
         ]
+
+    def get_active_assets_by_category(self, category: str) -> list[DetectedAsset]:
+        """Returns only usable (active) assets in a given category."""
+        return self.get_assets_by_category(category, include_filtered=False)
 
     def record_manual_change(self, action: str, details: dict[str, Any]) -> None:
         change_record = {

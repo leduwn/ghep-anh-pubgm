@@ -58,3 +58,38 @@ def test_save_and_load_settings(tmp_path):
 def test_load_nonexistent_settings():
     with pytest.raises(ConfigurationError):
         AutoCutSettings.load("nonexistent_path_xyz.json")
+
+
+
+def test_settings_relative_path_semantics():
+    s = AutoCutSettings(workspace_dir="workspace_rel", output_dir="output_rel")
+    from core.constants import DEFAULT_ROOT_DIR
+    assert s.workspace_dir == (DEFAULT_ROOT_DIR / "workspace_rel").resolve()
+    assert s.output_dir == (DEFAULT_ROOT_DIR / "output_rel").resolve()
+
+
+def test_settings_load_default():
+    s = AutoCutSettings.load_default()
+    assert s is not None
+    assert s.workspace_dir.is_absolute()
+    assert s.default_gun_columns == 4
+
+
+def test_settings_bounds_validation():
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(default_gun_columns=0)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(default_gun_columns=25)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(default_vehicle_rows=0)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(default_vehicle_rows=30)
+
+
+def test_settings_atomic_save_no_tmp(tmp_path):
+    target = tmp_path / "settings.json"
+    s = AutoCutSettings()
+    s.save(target)
+    assert target.is_file()
+    assert not target.with_suffix(".tmp").exists()
+

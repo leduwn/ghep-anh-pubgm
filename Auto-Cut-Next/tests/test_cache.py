@@ -79,3 +79,33 @@ def test_disk_cache(tmp_path):
     assert disk.get("missing_key") is None
     assert disk.delete("test_key") is True
     assert disk.get("test_key") is None
+
+
+
+def test_disk_cache_atomic_and_corruption_recovery(tmp_path):
+    disk = DiskCache(tmp_path / "cache_atomic")
+    disk.put("k_valid", {"foo": "bar"})
+
+    # Check target exists and no .tmp file
+    target = disk._path_for_key("k_valid")
+    assert target.is_file()
+    assert not target.with_suffix(".tmp").exists()
+
+    # Intentionally corrupt the file
+    target.write_bytes(b"CORRUPTED_NOT_JSON")
+    assert disk.get("k_valid") is None
+    assert disk.corruptions == 1
+    # File should have been removed after detecting corruption
+    assert not target.is_file()
+
+
+def test_disk_cache_clear(tmp_path):
+    disk = DiskCache(tmp_path / "cache_clear")
+    disk.put("k1", {"n": 1})
+    disk.put("k2", {"n": 2})
+    assert disk.get("k1") is not None
+
+    disk.clear()
+    assert disk.get("k1") is None
+    assert disk.get("k2") is None
+

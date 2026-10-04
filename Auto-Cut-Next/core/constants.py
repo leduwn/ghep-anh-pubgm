@@ -2,6 +2,7 @@
 
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 # Application and Schema Versions
 APP_NAME = "Auto-Cut-Next"
@@ -85,3 +86,24 @@ DEFAULT_MAX_OUTPUT_SIZE = (DEFAULT_MAX_CANVAS_WIDTH, DEFAULT_MAX_CANVAS_HEIGHT)
 DEFAULT_LRU_CACHE_CAPACITY = 512
 DEFAULT_THUMBNAIL_MAX_DIMENSION = 320
 DEFAULT_SCAN_MAX_DIMENSION = 1600
+
+# Validation Bounds
+MIN_COLUMNS = 1
+MAX_COLUMNS = 20
+MIN_ROWS = 1
+MAX_ROWS = 20
+
+
+def validate_confidence(val: Any, name: str = "confidence") -> float:
+    """Validates that a confidence value is a float in [0.0, 1.0] and not NaN/Inf."""
+    import math
+    try:
+        f = float(val)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a real number, got {val!r}") from exc
+    if math.isnan(f) or math.isinf(f):
+        raise ValueError(f"{name} cannot be NaN or Infinite: {f}")
+    if not (0.0 <= f <= 1.0):
+        raise ValueError(f"{name} must be in [0.0, 1.0], got {f}")
+    return f
+

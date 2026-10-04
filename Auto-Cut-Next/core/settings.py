@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
 from .constants import (
+    DEFAULT_ROOT_DIR,
     DEFAULT_WORKSPACE_DIR,
     DEFAULT_OUTPUT_DIR,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD,
     DEFAULT_CLASSIFIER_REVIEW_THRESHOLD,
     DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD,
@@ -18,6 +22,10 @@ from .constants import (
     DEFAULT_DUPLICATE_THRESHOLD,
     DEFAULT_MAX_CANVAS_WIDTH,
     DEFAULT_MAX_CANVAS_HEIGHT,
+    MIN_COLUMNS,
+    MAX_COLUMNS,
+    MIN_ROWS,
+    MAX_ROWS,
 )
 from .exceptions import ConfigurationError
 
@@ -51,8 +59,13 @@ class AutoCutSettings:
     enable_debug: bool = False
 
     def __post_init__(self):
-        self.workspace_dir = Path(self.workspace_dir).resolve()
-        self.output_dir = Path(self.output_dir).resolve()
+        # Resolve relative paths against DEFAULT_ROOT_DIR for deterministic behavior
+        ws = Path(self.workspace_dir)
+        self.workspace_dir = (DEFAULT_ROOT_DIR / ws).resolve() if not ws.is_absolute() else ws.resolve()
+
+        out = Path(self.output_dir)
+        self.output_dir = (DEFAULT_ROOT_DIR / out).resolve() if not out.is_absolute() else out.resolve()
+
         self.validate()
 
     def validate(self) -> None:
@@ -74,6 +87,10 @@ class AutoCutSettings:
             raise ConfigurationError("classifier_review_threshold > classifier_accept_threshold.")
         if self.auto_color.lower() not in {"off", "preview", "photoshop"}:
             raise ConfigurationError(f"Invalid auto_color mode: '{self.auto_color}'.")
+        if not (MIN_COLUMNS <= self.default_gun_columns <= MAX_COLUMNS):
+            raise ConfigurationError(f"default_gun_columns must be {MIN_COLUMNS}..{MAX_COLUMNS}, got {self.default_gun_columns}.")
+        if not (MIN_ROWS <= self.default_vehicle_rows <= MAX_ROWS):
+            raise ConfigurationError(f"default_vehicle_rows must be {MIN_ROWS}..{MAX_ROWS}, got {self.default_vehicle_rows}.")
         w, h = self.max_output_size
         if w < 100 or h < 100 or w > 20000 or h > 20000:
             raise ConfigurationError(f"Invalid max_output_size: ({w}, {h}).")
@@ -125,10 +142,19 @@ class AutoCutSettings:
         path = Path(target_path).resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
-            f.flush()
-        temp_path.replace(path)
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+        except Exception as exc:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
+            raise ConfigurationError(f"Failed to atomically save settings to {path}: {exc}") from exc
 
     @classmethod
     def load(cls, source_path: Union[str, Path]) -> "AutoCutSettings":
@@ -141,4 +167,17 @@ class AutoCutSettings:
             return cls.from_dict(data)
         except Exception as e:
             raise ConfigurationError(f"Failed to load settings from {path}: {e}") from e
+
+    @classmethod
+    def load_default(cls, config_path: Optional[Union[str, Path]] = None) -> "AutoCutSettings":
+        """Loads canonical default settings from config/default_settings.json with fallback."""
+        target = Path(config_path).resolve() if config_path else DEFAULT_CONFIG_PATH.resolve()
+        if target.is_file():
+            try:
+                return cls.load(target)
+            except Exception as exc:
+                logging.getLogger("AutoCutNext.settings").warning(
+                    f"Failed to load default settings from {target}: {exc}. Using built-in defaults."
+                )
+        return cls()
 

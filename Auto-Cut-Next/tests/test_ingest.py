@@ -79,3 +79,46 @@ def test_sha256_reproducibility(sample_image_1080p):
     h2 = compute_sha256(sample_image_1080p)
     assert h1 == h2
     assert len(h1) == 64
+
+
+
+def test_sandbox_nested_files_allowed(tmp_path, sample_image_1080p):
+    sandbox = tmp_path / "sandbox_nested"
+    sub = sandbox / "subfolder" / "deeper"
+    sub.mkdir(parents=True)
+    nested_img = sub / "nested.png"
+    nested_img.write_bytes(sample_image_1080p.read_bytes())
+
+    ingestor = ImageIngestor(allowed_root=sandbox)
+    src = ingestor.ingest_file(nested_img)
+    assert src.status == SourceStatus.SUCCESS.value
+
+    found = ingestor.scan_directory(sandbox, recursive=True)
+    assert len(found) == 1
+    assert found[0].name == "nested.png"
+
+
+def test_sandbox_symlink_escape_rejected(tmp_path, sample_image_1080p):
+    outside_dir = tmp_path / "outside_secret"
+    outside_dir.mkdir()
+    secret_img = outside_dir / "secret.png"
+    secret_img.write_bytes(sample_image_1080p.read_bytes())
+
+    sandbox = tmp_path / "sandbox_link"
+    sandbox.mkdir()
+
+    symlink_img = sandbox / "symlink_to_outside.png"
+    try:
+        symlink_img.symlink_to(secret_img)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink creation not permitted in this environment")
+
+    # scan_directory with sandbox enforcement must exclude symlink pointing outside
+    ingestor = ImageIngestor(allowed_root=sandbox)
+    found = ingestor.scan_directory(sandbox)
+    assert symlink_img not in found
+
+    # ingest_file on the symlink must raise PathTraversalError
+    with pytest.raises(PathTraversalError):
+        ingestor.ingest_file(symlink_img)
+

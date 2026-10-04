@@ -11,17 +11,39 @@ from typing import Generator
 @dataclass
 class MetricsCollector:
     """Collects counters, durations and produces end-of-run performance reports."""
-    sources_total: int = 0
+    sources_seen: int = 0
+    sources_added: int = 0
+    sources_duplicates: int = 0
+    sources_forced: int = 0
+    sources_failed: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0
-    duplicates_skipped: int = 0
     locked_skipped: int = 0
     partial_skipped: int = 0
     review_required: int = 0
 
     durations: dict[str, float] = field(default_factory=dict)
     start_time: float = field(default_factory=time.perf_counter)
+
+    @property
+    def sources_total(self) -> int:
+        """Backward-compatible alias for total ingested unique sources."""
+        return self.sources_added
+
+    @sources_total.setter
+    def sources_total(self, val: int) -> None:
+        self.sources_added = val
+
+    @property
+    def duplicates_skipped(self) -> int:
+        """Backward-compatible alias for sources_duplicates."""
+        return self.sources_duplicates
+
+    @duplicates_skipped.setter
+    def duplicates_skipped(self, val: int) -> None:
+        self.sources_duplicates = val
 
     @contextmanager
     def timer(self, stage_name: str) -> Generator[None, None, None]:
@@ -41,14 +63,17 @@ class MetricsCollector:
             "=" * 50,
             "         AUTO-CUT-NEXT EXECUTION SUMMARY",
             "=" * 50,
-            f"Sources:            {self.sources_total}",
+            f"Sources Seen:       {self.sources_seen}",
+            f"Sources Added:      {self.sources_added}",
+            f"Duplicates Skipped: {self.sources_duplicates}",
+            f"Sources Forced:     {self.sources_forced}",
+            f"Sources Failed:     {self.sources_failed}",
             f"Classified:         {self.sources_classified}",
             f"Unknown:            {self.sources_unknown}",
-            f"Assets:             {self.assets_detected}",
-            f"Duplicates:         {self.duplicates_skipped}",
-            f"Locked skipped:     {self.locked_skipped}",
-            f"Partial skipped:    {self.partial_skipped}",
-            f"Review:             {self.review_required}",
+            f"Assets Detected:    {self.assets_detected}",
+            f"Locked Skipped:     {self.locked_skipped}",
+            f"Partial Skipped:    {self.partial_skipped}",
+            f"Review Required:    {self.review_required}",
             "-" * 50,
         ]
         for stage, dur in self.durations.items():

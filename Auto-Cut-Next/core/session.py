@@ -101,9 +101,9 @@ class WorkspaceManager:
             raise SessionCorruptError(f"Invalid root type in session file: expected dict, got {type(data).__name__}")
 
         schema_version = int(data.get("version", 0))
-        if schema_version > SESSION_SCHEMA_VERSION:
+        if schema_version != SESSION_SCHEMA_VERSION:
             raise SessionIncompatibleError(
-                f"Session schema version {schema_version} is newer than supported version {SESSION_SCHEMA_VERSION}."
+                f"Session schema version {schema_version} is incompatible with supported version {SESSION_SCHEMA_VERSION}."
             )
 
         return AccountSession.from_dict(data)

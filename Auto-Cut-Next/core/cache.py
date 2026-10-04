@@ -5,10 +5,12 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Generic, Optional, TypeVar, Union
 
+from .exceptions import CacheError
 from .models import Rect
 from .constants import DEFAULT_LRU_CACHE_CAPACITY
 
@@ -102,10 +104,15 @@ class DiskCache:
         self.cache_dir = Path(cache_dir).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._corruptions = 0
+
+    @property
+    def corruptions(self) -> int:
+        with self._lock:
+            return self._corruptions
 
     def _path_for_key(self, key: str) -> Path:
         safe_key = hashlib.sha256(key.encode("utf-8")).hexdigest()
-        # Subdirectory sharding by first 2 chars
         shard = safe_key[:2]
         shard_dir = self.cache_dir / shard
         shard_dir.mkdir(parents=True, exist_ok=True)
@@ -120,16 +127,30 @@ class DiskCache:
                 with open(target, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
+                self._corruptions += 1
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 return None
 
     def put(self, key: str, data: dict[str, Any]) -> None:
         target = self._path_for_key(key)
         temp_file = target.with_suffix(".tmp")
         with self._lock:
-            with open(temp_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.flush()
-            temp_file.replace(target)
+            try:
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_file, target)
+            except Exception as exc:
+                if temp_file.exists():
+                    try:
+                        temp_file.unlink()
+                    except OSError:
+                        pass
+                raise CacheError(f"Failed to atomically write cache key '{key}': {exc}") from exc
 
     def delete(self, key: str) -> bool:
         target = self._path_for_key(key)
@@ -140,9 +161,12 @@ class DiskCache:
             return False
 
     def clear(self) -> None:
+        failed_paths: list[Path] = []
         with self._lock:
             for item in self.cache_dir.rglob("*.json"):
                 try:
                     item.unlink()
-                except Exception:
-                    pass
+                except OSError:
+                    failed_paths.append(item)
+        if failed_paths:
+            raise CacheError(f"Failed to delete {len(failed_paths)} cache entries during clear().")

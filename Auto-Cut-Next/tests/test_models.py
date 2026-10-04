@@ -172,10 +172,14 @@ def test_account_session_lifecycle_and_dedup():
     session.add_asset(a2)
     session.add_asset(a3)
 
-    # get_assets_by_category filters out locked/empty/partial items
+    # get_assets_by_category returns all items in category (including locked/empty/partial) for review
     guns = session.get_assets_by_category("GUN")
-    assert len(guns) == 1
-    assert guns[0].id == "a1"
+    assert len(guns) == 2
+
+    # get_active_assets_by_category filters out locked/empty/partial items for layout
+    active_guns = session.get_active_assets_by_category("GUN")
+    assert len(active_guns) == 1
+    assert active_guns[0].id == "a1"
 
     # Manual change logging
     session.record_manual_change("SET_LEVEL", {"asset_id": "a1", "level": 7})
@@ -194,3 +198,100 @@ def test_account_session_lifecycle_and_dedup():
 def test_account_session_corrupt_data():
     with pytest.raises(SessionCorruptError):
         AccountSession.from_dict({"not_account_id": 123})
+
+
+
+def test_rect_empty_and_valid_and_clamp():
+    empty_rect = Rect(0, 0, 0, 0)
+    assert empty_rect.is_empty is True
+    assert empty_rect.is_valid_crop is False
+
+    valid_rect = Rect(10, 10, 50, 60)
+    assert valid_rect.is_empty is False
+    assert valid_rect.is_valid_crop is True
+
+    # Clamp
+    large_rect = Rect(50, 50, 200, 300)
+    clamped = large_rect.clamp(max_w=100, max_h=120)
+    assert clamped.right <= 100
+    assert clamped.bottom <= 120
+
+
+def test_confidence_validation():
+    # Negative confidence
+    with pytest.raises(ValueError):
+        ClassificationResult("GUN", confidence=-0.1)
+
+    # Confidence > 1.0
+    with pytest.raises(ValueError):
+        DetectedAsset("a", "s", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0", confidence=1.5)
+
+    # NaN / Inf confidence
+    import math
+    with pytest.raises(ValueError):
+        GunMetadata(ocr_confidence=float("nan"))
+    with pytest.raises(ValueError):
+        AccountSession("acc", uid_confidence=float("inf"))
+
+
+def test_account_session_upsert_and_invalidation():
+    session = AccountSession("ACC_UPSERT")
+    src = SourceImage("s1", "p1.png", "sha_111", "p1.png", 100, 100, 1.0, 1)
+
+    # 1. Add new
+    s_out, is_affected = session.upsert_source(src, force=False)
+    assert is_affected is True
+    assert len(session.sources) == 1
+
+    # 2. Add asset for s1
+    asset = DetectedAsset("a1", "s1", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0")
+    session.add_asset(asset)
+    assert len(session.assets) == 1
+
+    # 3. Upsert duplicate without force
+    s_dup, is_affected_dup = session.upsert_source(src, force=False)
+    assert is_affected_dup is False
+    assert len(session.sources) == 1
+    assert len(session.assets) == 1  # asset preserved
+
+    # 4. Upsert duplicate with force -> invalidates asset
+    src_modified = SourceImage("s1", "new_p1.png", "sha_111", "new_p1.png", 200, 200, 2.0, 1)
+    s_forced, is_affected_force = session.upsert_source(src_modified, force=True)
+    assert is_affected_force is True
+    assert len(session.sources) == 1
+    assert session.sources["s1"].path == "new_p1.png"
+    assert len(session.assets) == 0  # asset invalidated!
+
+
+def test_account_session_active_vs_all_assets():
+    session = AccountSession("ACC_ACTIVE")
+    a_ok = DetectedAsset("a1", "s1", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0")
+    a_locked = DetectedAsset("a2", "s1", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0", locked=True)
+    a_empty = DetectedAsset("a3", "s1", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0", empty=True)
+
+    session.add_asset(a_ok)
+    session.add_asset(a_locked)
+    session.add_asset(a_empty)
+
+    # All assets (including filtered) for Review UI
+    all_guns = session.get_assets_by_category("GUN", include_filtered=True)
+    assert len(all_guns) == 3
+
+    # Active assets only for Layout Engine
+    active_guns = session.get_active_assets_by_category("GUN")
+    assert len(active_guns) == 1
+    assert active_guns[0].id == "a1"
+
+
+def test_source_id_collision_disambiguation():
+    session = AccountSession("ACC_COLLIDE")
+    src1 = SourceImage("col_id", "p1.png", "sha_one_1111111111111111111111111111", "p1.png", 100, 100, 1.0, 1)
+    session.upsert_source(src1)
+
+    # Different full sha, but artificially identical initial id
+    src2 = SourceImage("col_id", "p2.png", "sha_two_2222222222222222222222222222", "p2.png", 100, 100, 1.0, 2)
+    s2_out, added = session.upsert_source(src2)
+    assert added is True
+    assert len(session.sources) == 2
+    assert s2_out.id != "col_id"  # Disambiguated!
+

@@ -77,10 +77,9 @@ class ImageIngestor:
     def validate_path_safety(self, target_path: Union[str, Path]) -> Path:
         resolved = Path(target_path).resolve()
         if self.allowed_root:
-            try:
-                resolved.relative_to(self.allowed_root)
-            except ValueError as exc:
-                raise PathTraversalError(f"Path '{resolved}' escapes allowed directory '{self.allowed_root}'") from exc
+            root_resolved = Path(self.allowed_root).resolve()
+            if not resolved.is_relative_to(root_resolved):
+                raise PathTraversalError(f"Path '{resolved}' escapes allowed directory '{root_resolved}'")
         return resolved
 
     def ingest_file(
@@ -177,16 +176,24 @@ class ImageIngestor:
         self,
         directory_path: Union[str, Path],
         recursive: bool = False,
+        enforce_root: bool = True,
     ) -> list[Path]:
-        """Collects all valid image files in a directory sorted by name."""
+        """Collects all valid image files in a directory sorted by name, enforcing sandbox."""
         dir_path = self.validate_path_safety(directory_path)
         if not dir_path.is_dir():
             return []
+
+        effective_root = self.allowed_root or (dir_path.resolve() if enforce_root else None)
 
         pattern = "**/*" if recursive else "*"
         candidates = []
         for p in dir_path.glob(pattern):
             if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                if effective_root:
+                    resolved = p.resolve()
+                    if not resolved.is_relative_to(effective_root):
+                        # Symlink / junction points outside sandbox root -> reject
+                        continue
                 candidates.append(p)
         return sorted(candidates, key=lambda x: x.name.lower())
 

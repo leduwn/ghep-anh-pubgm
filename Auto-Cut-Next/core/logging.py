@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -42,9 +43,12 @@ class StageLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = self.log_dir / log_filename
 
-        self.logger = logging.getLogger(f"AutoCutNext.{self.log_path.stem}")
+        # Unique logger identity per resolved log path to avoid multi-workspace collisions
+        logger_id = hashlib.sha1(str(self.log_path.resolve()).encode("utf-8")).hexdigest()[:12]
+        self.logger = logging.getLogger(f"AutoCutNext.{logger_id}")
         self.logger.setLevel(level)
         self.logger.propagate = False
+        self._handlers: list[logging.Handler] = []
 
         if not self.logger.handlers:
             file_handler = RotatingFileHandler(
@@ -55,11 +59,32 @@ class StageLogger:
             )
             file_handler.setFormatter(StageFormatter())
             self.logger.addHandler(file_handler)
+            self._handlers.append(file_handler)
 
             if console:
                 console_handler = logging.StreamHandler()
                 console_handler.setFormatter(StageFormatter())
                 self.logger.addHandler(console_handler)
+                self._handlers.append(console_handler)
+        else:
+            self._handlers = list(self.logger.handlers)
+
+    def close(self) -> None:
+        """Flushes, closes and detaches all handlers owned by this logger instance."""
+        for h in list(self._handlers):
+            try:
+                h.flush()
+                h.close()
+            except Exception:
+                pass
+            self.logger.removeHandler(h)
+        self._handlers.clear()
+
+    def __enter__(self) -> "StageLogger":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
 
     def log(
         self,
