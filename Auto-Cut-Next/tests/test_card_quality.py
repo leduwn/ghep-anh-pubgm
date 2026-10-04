@@ -128,3 +128,44 @@ def test_content_score_border_only_empty():
     res = evaluator.evaluate(tile_border_only)
     assert res.empty is True
 
+
+def test_empty_content_threshold_sensitivity():
+    """Validates that empty decision strictly responds to empty_content_threshold setting without hidden hardcoded raw thresholds."""
+    # 1. Clear empty tile (detail ~ 0.0)
+    clear_empty = np.zeros((160, 160, 3), dtype=np.uint8)
+    clear_empty[:, :] = (35, 30, 25)
+
+    # 2. Border-only tile (high contrast border, flat center, detail ~ 0.0)
+    border_only = np.zeros((160, 160, 3), dtype=np.uint8)
+    border_only[:, :] = (35, 30, 25)
+    cv2.rectangle(border_only, (0, 0), (159, 159), (255, 255, 255), 4)
+
+    # 3. Intermediate subtle texture tile (detail ~ 0.02, normalized score ~ 0.40)
+    subtle_tile = np.zeros((160, 160, 3), dtype=np.uint8)
+    subtle_tile[:, :] = (35, 30, 25)
+    # Add subtle pattern in center (rows with slight alternations)
+    for y in range(40, 120, 4):
+        subtle_tile[y:y+2, 40:120] = (55, 50, 45)
+
+    sc_empty, _ = compute_content_score(clear_empty)
+    sc_border, _ = compute_content_score(border_only)
+    sc_subtle, _ = compute_content_score(subtle_tile)
+
+    assert sc_empty < 0.10
+    assert sc_border < 0.10
+    assert 0.15 < sc_subtle < 0.60
+
+    # Test threshold toggle on intermediate subtle tile:
+    # If threshold is high (0.70), subtle tile is marked empty
+    eval_high = CardQualityEvaluator(empty_content_threshold=0.70)
+    assert eval_high.evaluate(subtle_tile).empty is True
+
+    # If threshold is low (0.10), subtle tile is NOT marked empty
+    eval_low = CardQualityEvaluator(empty_content_threshold=0.10)
+    assert eval_low.evaluate(subtle_tile).empty is False
+
+    # Clear empty and border-only remain empty under standard threshold (0.35)
+    eval_std = CardQualityEvaluator(empty_content_threshold=0.35)
+    assert eval_std.evaluate(clear_empty).empty is True
+    assert eval_std.evaluate(border_only).empty is True
+

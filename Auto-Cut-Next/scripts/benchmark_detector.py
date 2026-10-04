@@ -177,6 +177,129 @@ def run_benchmarks():
     print("\n" + "=" * 75)
 
 
+def run_account_dedup_benchmark(temp_dir: Path):
+    print("\n" + "=" * 75)
+    print("      MULTI-SCREENSHOT ACCOUNT DEDUPLICATION BENCHMARK")
+    print("=" * 75)
+
+    num_screens = 3
+    rows, cols = 3, 3
+    cards_per_screen = rows * cols
+    total_cards = num_screens * cards_per_screen
+
+    screen_paths = []
+    for s_idx in range(num_screens):
+        seed = 42 if s_idx < 2 else 99
+        img = generate_synthetic_grid_screen(1920, 1080, rows=rows, cols=cols, seed=seed)
+        p = temp_dir / f"account_screen_{s_idx}.png"
+        cv2.imencode(".png", img)[1].tofile(str(p))
+        screen_paths.append(p)
+
+    detector = GenericDetector()
+    deduplicator = AccountDeduplicator()
+
+    all_assets = []
+    source_indices = {}
+    source_images = {}
+
+    for s_idx, p in enumerate(screen_paths):
+        s_id = f"source_{s_idx}"
+        source_indices[s_id] = s_idx
+        data = p.read_bytes()
+        arr = np.frombuffer(data, np.uint8)
+        bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        source_images[s_id] = bgr
+        ctx = DetectionContext(bgr, source_id=s_id, source_sha256=f"sha_{s_idx}")
+        grid_res = detector.detect_grid(ctx)
+        assets = detector.create_assets_from_candidates(
+            grid_res.candidates,
+            context=ctx,
+            category="ITEM_SET",
+            detector_version="2.1.0",
+        )
+        all_assets.extend(assets)
+        ctx.close()
+
+    iterations = 20
+
+    # 1. Benchmark Naive Multi-Decode (decoding source image per card)
+    naive_decode_times = []
+    for _ in range(iterations):
+        t0 = time.perf_counter()
+        tiles = {}
+        for asset in all_assets:
+            s_idx = source_indices[asset.source_id]
+            p = screen_paths[s_idx]
+            d = p.read_bytes()
+            img_bgr = cv2.imdecode(np.frombuffer(d, np.uint8), cv2.IMREAD_COLOR)
+            r = asset.crop_rect
+            tiles[asset.id] = img_bgr[r.y:r.y + r.h, r.x:r.x + r.w]
+        t1 = time.perf_counter()
+        naive_decode_times.append((t1 - t0) * 1000.0)
+
+    # 2. Benchmark Single-Pass Grouped Decode (M3.1 optimization)
+    single_pass_times = []
+    for _ in range(iterations):
+        t0 = time.perf_counter()
+        tiles = {}
+        grouped = {}
+        for a in all_assets:
+            grouped.setdefault(a.source_id, []).append(a)
+
+        for sid, a_list in grouped.items():
+            s_idx = source_indices[sid]
+            p = screen_paths[s_idx]
+            d = p.read_bytes()
+            img_bgr = cv2.imdecode(np.frombuffer(d, np.uint8), cv2.IMREAD_COLOR)
+            for a in a_list:
+                r = a.crop_rect
+                tiles[a.id] = img_bgr[r.y:r.y + r.h, r.x:r.x + r.w].copy()
+            del img_bgr
+        t1 = time.perf_counter()
+        single_pass_times.append((t1 - t0) * 1000.0)
+
+    # 3. Benchmark Perceptual Hash + MAE Dedup Algorithm
+    extracted_tiles = {}
+    for a in all_assets:
+        bgr = source_images[a.source_id]
+        r = a.crop_rect
+        extracted_tiles[a.id] = bgr[r.y:r.y + r.h, r.x:r.x + r.w]
+
+    dedup_algo_times = []
+    dup_counts = []
+    for _ in range(iterations):
+        t0 = time.perf_counter()
+        updated, d_count = deduplicator.deduplicate_session_assets(
+            all_assets,
+            source_tiles=extracted_tiles,
+            source_indices=source_indices,
+        )
+        t1 = time.perf_counter()
+        dedup_algo_times.append((t1 - t0) * 1000.0)
+        dup_counts.append(d_count)
+
+    def p95(data: list[float]) -> float:
+        return float(np.percentile(data, 95))
+
+    med_naive = statistics.median(naive_decode_times)
+    med_single = statistics.median(single_pass_times)
+    speedup = med_naive / med_single if med_single > 0 else 1.0
+
+    print(f"\nScenario: {num_screens} Screens x {cards_per_screen} Cards = {total_cards} Total Cards")
+    print(f"Duplicates Identified: {dup_counts[0]}")
+    print(f"\nDecoding Strategy Comparison (Iterations: {iterations}):")
+    print(f"  Naive Multi-Decode (27 decodes):     Median {med_naive:6.2f} ms | P95 {p95(naive_decode_times):6.2f} ms")
+    print(f"  Single-Pass Decode (3 decodes):      Median {med_single:6.2f} ms | P95 {p95(single_pass_times):6.2f} ms")
+    print(f"  Single-Decode Efficiency Gain:       {speedup:6.1f}x faster")
+    print(f"\nPerceptual Dedup Algorithm (pHash + MAE):")
+    print(f"  Clustering & Comparison Time:        Median {statistics.median(dedup_algo_times):6.2f} ms | P95 {p95(dedup_algo_times):6.2f} ms")
+    print(f"  End-to-End Account Dedup Time:       Median {med_single + statistics.median(dedup_algo_times):6.2f} ms")
+    print("=" * 75)
+
+
 if __name__ == "__main__":
-    run_benchmarks()
+    with tempfile.TemporaryDirectory() as td:
+        run_benchmarks()
+        run_account_dedup_benchmark(Path(td))
+
 

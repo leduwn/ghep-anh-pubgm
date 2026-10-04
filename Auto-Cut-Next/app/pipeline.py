@@ -331,8 +331,9 @@ class AutoCutPipeline:
                 if result.decision != Decision.ERROR.value:
                     try:
                         disk_cache.put(cache_key, result.to_dict())
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(f"Failed to cache classification for {source.id}: {exc}")
+                        self.metrics.cache_write_errors += 1
 
                 if debug_dir:
                     diag_path = debug_dir / f"{source.id}.json"
@@ -386,8 +387,10 @@ class AutoCutPipeline:
         detector = GenericDetector(
             profile=profile,
             lock_threshold=self.settings.lock_threshold,
-            empty_detail_threshold=self.settings.empty_detail_threshold,
-            duplicate_threshold=self.settings.duplicate_threshold,
+            empty_content_threshold=self.settings.empty_content_threshold,
+            duplicate_mae_threshold=self.settings.duplicate_mae_threshold,
+            duplicate_phash_max_distance=self.settings.duplicate_phash_max_distance,
+            detector_confidence_threshold=self.settings.detector_confidence_threshold,
         )
 
         disk_cache = DiskCache(self.workspace.workspace_root / "cache" / "detection")
@@ -486,7 +489,7 @@ class AutoCutPipeline:
                     image_sha256=source.sha256,
                     crop_rect=None,
                     subsystem_version=MISC_GRID_VERSION,
-                    route=f"detect_grid:{detector.profile.fingerprint}:l{self.settings.lock_threshold}:e{self.settings.empty_detail_threshold}",
+                    route=f"detect_grid:{detector.profile.fingerprint}:l{self.settings.lock_threshold}:e{self.settings.empty_content_threshold}",
                 )
 
                 grid_res: Optional[GridDetectionResult] = None
@@ -558,8 +561,9 @@ class AutoCutPipeline:
                             "diagnostics": grid_res.diagnostics,
                             "duration_ms": grid_res.duration_ms,
                         })
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning(f"Failed to cache grid detection for {source.id}: {exc}")
+                        self.metrics.cache_write_errors += 1
 
                 if grid_res.detected:
                     assets = detector.create_assets_from_candidates(
@@ -568,6 +572,7 @@ class AutoCutPipeline:
                         category=class_res.category,
                         detector_version=MISC_GRID_VERSION,
                         source_review_required=(class_res.decision == Decision.REVIEW.value),
+                        grid_confidence=grid_res.grid_confidence,
                     )
 
                     # Invalidate only previously detected generic assets for this source
@@ -586,7 +591,12 @@ class AutoCutPipeline:
                     active_cnt = sum(1 for a in assets if not (a.locked or a.empty or a.partial or a.duplicate))
                     rev_cnt = sum(1 for a in assets if a.review_required)
 
-                    det_status = DetectionStatus.REVIEW.value if rev_cnt > 0 else DetectionStatus.SUCCESS.value
+                    is_low_conf = grid_res.grid_confidence < self.settings.detector_confidence_threshold
+                    det_status = DetectionStatus.REVIEW.value if (rev_cnt > 0 or is_low_conf) else DetectionStatus.SUCCESS.value
+                    det_reasons = [f"Grid detected: {grid_res.rows}x{grid_res.columns} ({len(assets)} cards)"]
+                    if is_low_conf:
+                        det_reasons.append(f"Grid geometry confidence {grid_res.grid_confidence:.2f} below threshold {self.settings.detector_confidence_threshold:.2f}")
+
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=det_status,
@@ -598,7 +608,7 @@ class AutoCutPipeline:
                         empty_count=sum(1 for a in assets if a.empty),
                         partial_count=sum(1 for a in assets if a.partial),
                         review_count=rev_cnt,
-                        reasons=[f"Grid detected: {grid_res.rows}x{grid_res.columns} ({len(assets)} cards)"],
+                        reasons=det_reasons,
                         duration_ms=(time.perf_counter() - t_detect_0) * 1000.0,
                     )
                 else:
@@ -640,20 +650,24 @@ class AutoCutPipeline:
                     sources_since_checkpoint = 0
 
             # Account-level perceptual deduplication
-            # Ensure tile crops are loaded for all assets in session
+            # Group missing tiles by source_id so each source image is decoded at most ONCE
+            missing_by_source: dict[str, list[DetectedAsset]] = {}
             for asset in session.assets:
                 if asset.id not in tile_crops:
-                    src = session.sources.get(asset.source_id)
-                    if src and Path(src.path).is_file():
-                        try:
-                            s_data = Path(src.path).read_bytes()
-                            s_arr = np.frombuffer(s_data, np.uint8)
-                            s_bgr = cv2.imdecode(s_arr, cv2.IMREAD_COLOR)
-                            if s_bgr is not None:
-                                c = asset.crop_rect.clamp(s_bgr.shape[1], s_bgr.shape[0])
-                                tile_crops[asset.id] = s_bgr[c.y:c.bottom, c.x:c.right]
-                        except Exception:
-                            pass
+                    missing_by_source.setdefault(asset.source_id, []).append(asset)
+
+            from core.ingest import read_image_cv2
+            for src_id, assets_for_src in missing_by_source.items():
+                src = session.sources.get(src_id)
+                if src and Path(src.path).is_file():
+                    s_bgr = read_image_cv2(src.path)
+                    if s_bgr is not None:
+                        self.metrics.source_decodes += 1
+                        sh, sw = s_bgr.shape[:2]
+                        for a in assets_for_src:
+                            c = a.crop_rect.clamp(sw, sh)
+                            tile_crops[a.id] = s_bgr[c.y:c.bottom, c.x:c.right]
+                        del s_bgr  # Release memory immediately
 
             updated_assets, dups = detector.deduplicator.deduplicate_session_assets(
                 session.assets,

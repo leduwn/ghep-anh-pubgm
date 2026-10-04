@@ -37,6 +37,7 @@ from .models import (
     DetectedAsset,
     AccountSession,
 )
+from .detection_state import SourceDetectionResult
 from .settings import AutoCutSettings
 from .logging import StageLogger
 from .cache import LRUCache, DiskCache, CacheKeyGenerator
@@ -71,6 +72,7 @@ __all__ = [
     "Rect",
     "SourceImage",
     "ClassificationResult",
+    "SourceDetectionResult",
     "GunMetadata",
     "VehicleMetadata",
     "OutfitMetadata",

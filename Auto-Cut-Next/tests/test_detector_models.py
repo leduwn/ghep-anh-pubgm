@@ -5,11 +5,11 @@ import pytest
 
 from core.constants import DEFAULT_SCAN_MAX_DIMENSION, DetectionStatus, MISC_GRID_VERSION
 from core.models import Rect, generate_asset_id
+from core.detection_state import SourceDetectionResult
 from detectors.detector_models import (
     CardGeometryProfile,
     CardCandidate,
     GridDetectionResult,
-    SourceDetectionResult,
 )
 from detectors.detection_context import DetectionContext
 
@@ -148,10 +148,16 @@ def test_detection_context_crop_original_and_scan():
 
 
 def test_generate_asset_id_determinism():
-    id1 = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 30, 40))
-    id2 = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 30, 40))
-    id_diff = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 31, 40))
+    base_id = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 30, 40))
+    same_id = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 30, 40))
+    rect_diff_id = generate_asset_id("sha1", "GUN", "detector", "v1", Rect(10, 20, 31, 40))
+    ver_diff_id = generate_asset_id("sha1", "GUN", "detector", "v2", Rect(10, 20, 30, 40))
+    cat_diff_id = generate_asset_id("sha1", "HELMET", "detector", "v1", Rect(10, 20, 30, 40))
+    sha_diff_id = generate_asset_id("sha2", "GUN", "detector", "v1", Rect(10, 20, 30, 40))
 
-    assert id1 == id2
-    assert id1 != id_diff
-    assert len(id1) == 16
+    assert base_id == same_id
+    assert base_id != rect_diff_id
+    assert base_id != ver_diff_id
+    assert base_id != cat_diff_id
+    assert base_id != sha_diff_id
+    assert len(base_id) == 16

@@ -23,19 +23,30 @@ class GenericDetector:
         self,
         profile: Optional[CardGeometryProfile] = None,
         lock_threshold: float = 0.50,
-        empty_detail_threshold: float = 0.15,
-        duplicate_threshold: float = 12.0,
+        empty_content_threshold: float = 0.35,
+        duplicate_mae_threshold: float = 12.0,
+        duplicate_phash_max_distance: int = 10,
+        detector_confidence_threshold: float = 0.60,
+        empty_detail_threshold: Optional[float] = None,
+        duplicate_threshold: Optional[float] = None,
     ):
         self.profile = profile or CardGeometryProfile()
+        eff_empty = empty_content_threshold if empty_detail_threshold is None else (0.35 if empty_detail_threshold == 0.15 else empty_detail_threshold)
+        eff_mae = duplicate_mae_threshold if duplicate_threshold is None else (12.0 if duplicate_threshold <= 1.0 else duplicate_threshold)
+        self.detector_confidence_threshold = detector_confidence_threshold
+
         self.quality_evaluator = CardQualityEvaluator(
             lock_threshold=lock_threshold,
-            empty_detail_threshold=empty_detail_threshold,
+            empty_content_threshold=eff_empty,
         )
         self.grid_detector = GenericGridDetector(
             default_profile=self.profile,
             quality_evaluator=self.quality_evaluator,
         )
-        self.deduplicator = AccountDeduplicator(diff_threshold=duplicate_threshold)
+        self.deduplicator = AccountDeduplicator(
+            diff_threshold=eff_mae,
+            phash_threshold=duplicate_phash_max_distance,
+        )
 
     def detect_grid(
         self,
@@ -52,6 +63,7 @@ class GenericDetector:
         category: str,
         detector_version: str = MISC_GRID_VERSION,
         source_review_required: bool = False,
+        grid_confidence: Optional[float] = None,
     ) -> list[DetectedAsset]:
         """Converts CardCandidate items into canonical DetectedAsset instances with stable deterministic IDs."""
         assets: list[DetectedAsset] = []
@@ -69,6 +81,10 @@ class GenericDetector:
             if source_review_required:
                 review_req = True
                 review_reasons.append("Source classification requires review")
+
+            if grid_confidence is not None and grid_confidence < self.detector_confidence_threshold:
+                review_req = True
+                review_reasons.append(f"Grid geometry confidence {grid_confidence:.2f} below threshold {self.detector_confidence_threshold:.2f}")
 
             asset = DetectedAsset(
                 id=asset_id,

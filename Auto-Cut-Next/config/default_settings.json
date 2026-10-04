@@ -10,8 +10,9 @@
   "classifier_scan_max_dimension": 1600,
   "detector_confidence_threshold": 0.6,
   "lock_threshold": 0.5,
-  "empty_detail_threshold": 0.15,
-  "duplicate_threshold": 0.92,
+  "empty_content_threshold": 0.35,
+  "duplicate_phash_max_distance": 10,
+  "duplicate_mae_threshold": 12.0,
   "max_output_size": [
     5000,
     5000

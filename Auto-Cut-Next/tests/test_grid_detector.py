@@ -194,3 +194,65 @@ def test_generic_grid_detector_random_dark_background_no_grid():
 
     ctx.close()
 
+
+def test_grid_confidence_geometry_based():
+    """Validates that geometry-based grid confidence ranks perfect > shifted > irregular, and diagnostics are recorded."""
+    detector = GenericGridDetector()
+    profile = CardGeometryProfile()
+
+    # 1. Perfect 3x3 grid
+    perfect_grid = [
+        (Rect(100 + c * 120, 150 + r * 130, 100, 100), r, c)
+        for r in range(3) for c in range(3)
+    ]
+    conf_perfect, diag_perfect = detector.compute_grid_confidence(perfect_grid, scan_w=1280, scan_h=720, profile=profile)
+    assert conf_perfect >= 0.95
+    assert diag_perfect["size_consistency"] == 1.0
+    assert diag_perfect["horizontal_alignment"] == 1.0
+    assert diag_perfect["vertical_alignment"] == 1.0
+    assert diag_perfect["spacing_consistency"] == 1.0
+    assert diag_perfect["fill_ratio"] == 1.0
+
+    # 2. Slightly shifted 3x3 grid (jitter coordinates +/- 4 px)
+    rng = np.random.default_rng(111)
+    shifted_grid = [
+        (Rect(100 + c * 120 + int(rng.integers(-4, 5)), 150 + r * 130 + int(rng.integers(-4, 5)), 100, 100), r, c)
+        for r in range(3) for c in range(3)
+    ]
+    conf_shifted, diag_shifted = detector.compute_grid_confidence(shifted_grid, scan_w=1280, scan_h=720, profile=profile)
+
+    # 3. Irregular spacing 3x3 grid (large spacing irregularities)
+    irregular_grid = [
+        (Rect(100 + c * (110 + c * 35), 150 + r * (110 + r * 30), 100, 100), r, c)
+        for r in range(3) for c in range(3)
+    ]
+    conf_irregular, diag_irregular = detector.compute_grid_confidence(irregular_grid, scan_w=1280, scan_h=720, profile=profile)
+
+    # Ranking: perfect > shifted > irregular
+    assert conf_perfect > conf_shifted
+    assert conf_shifted > conf_irregular
+
+
+def test_grid_confidence_locked_cards_not_degraded():
+    """Confirms that locked card status does NOT lower grid geometry confidence."""
+    # Synthetic grid where all cards have lock icon stamped in top-right
+    img_locked = make_synthetic_grid(rows=2, cols=3)
+    # Stamp bright white squares (simulating locks) on all cards
+    for r in range(2):
+        for c in range(3):
+            cx = 300 + c * 120
+            cy = 150 + r * 120
+            cv2.rectangle(img_locked, (cx + 70, cy + 10), (cx + 90, cy + 30), (255, 255, 255), -1)
+
+    ctx = DetectionContext(img_locked)
+    detector = GenericGridDetector()
+    res = detector.detect(ctx)
+    ctx.close()
+
+    assert res.detected is True
+    assert len(res.candidates) == 6
+    # Grid confidence must remain high because geometry is regular
+    assert res.grid_confidence >= 0.85
+    assert "size_consistency" in res.diagnostics
+    assert "horizontal_alignment" in res.diagnostics
+

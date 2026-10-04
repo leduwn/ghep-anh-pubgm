@@ -97,14 +97,22 @@ class CardQualityEvaluator:
     def __init__(
         self,
         lock_threshold: float = 0.50,
-        empty_detail_threshold: float = 0.15,
+        empty_content_threshold: float = 0.35,
         lock_uncertainty_margin: float = 0.10,
         empty_uncertainty_margin: float = 0.10,
+        empty_detail_threshold: Optional[float] = None,
     ):
         self.lock_threshold = lock_threshold
-        self.empty_detail_threshold = empty_detail_threshold
+        if empty_detail_threshold is not None:
+            self.empty_content_threshold = 0.35 if empty_detail_threshold == 0.15 else empty_detail_threshold
+        else:
+            self.empty_content_threshold = empty_content_threshold
         self.lock_uncertainty_margin = lock_uncertainty_margin
         self.empty_uncertainty_margin = empty_uncertainty_margin
+
+    @property
+    def empty_detail_threshold(self) -> float:
+        return self.empty_content_threshold
 
     def evaluate(
         self,
@@ -127,14 +135,14 @@ class CardQualityEvaluator:
             reasons.append(f"Uncertain lock score near threshold (score={lock_sc:.2f})")
 
         content_sc, raw_detail = compute_content_score(tile_bgr)
-        # Empty if raw_detail <= 0.018 or normalized content_score < empty_detail_threshold
-        is_empty = (raw_detail <= 0.018) or (content_sc < self.empty_detail_threshold)
-        empty_uncertain = (not is_empty) and (content_sc < self.empty_detail_threshold + self.empty_uncertainty_margin)
+        # Empty determined solely by normalized content_score < self.empty_content_threshold
+        is_empty = content_sc < self.empty_content_threshold
+        empty_uncertain = (not is_empty) and (content_sc < self.empty_content_threshold + self.empty_uncertainty_margin)
 
         if is_empty:
-            reasons.append(f"Empty/blank item slot (detail={raw_detail:.4f}, score={content_sc:.2f})")
+            reasons.append(f"Empty/blank item slot (content_score={content_sc:.2f} < {self.empty_content_threshold:.2f}, detail={raw_detail:.4f})")
         elif empty_uncertain:
-            reasons.append(f"Low content detail near empty threshold (detail={raw_detail:.4f})")
+            reasons.append(f"Low content detail near empty threshold (content_score={content_sc:.2f})")
 
         review_required = lock_uncertain or empty_uncertain or (0.05 <= partial_score < 0.10)
 

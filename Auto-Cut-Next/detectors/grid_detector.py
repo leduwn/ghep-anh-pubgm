@@ -162,6 +162,156 @@ class GenericGridDetector:
         best_grid = max(grids, key=lambda g: (g[0], g[1]))
         return best_grid[2]
 
+    def compute_grid_confidence(
+        self,
+        ordered_grid: list[tuple[Rect, int, int]],
+        scan_w: int,
+        scan_h: int,
+        profile: CardGeometryProfile,
+    ) -> tuple[float, dict[str, Any]]:
+        """Calculates geometry-based confidence score and diagnostic indicators."""
+        if not ordered_grid:
+            return 0.0, {
+                "size_consistency": 0.0,
+                "horizontal_alignment": 0.0,
+                "vertical_alignment": 0.0,
+                "spacing_consistency": 0.0,
+                "candidate_count": 0,
+                "fill_ratio": 0.0,
+            }
+
+        # Case 1: Single tile
+        if len(ordered_grid) == 1:
+            r = ordered_grid[0][0]
+            aspect = float(r.w) / max(1.0, float(r.h))
+            aspect_dev = abs(aspect - 1.0)
+            aspect_score = 1.0 if aspect_dev <= 0.10 else max(0.0, 1.0 - (aspect_dev - 0.10) * 2.0)
+
+            area_ratio = (r.w * r.h) / max(1.0, float(scan_w * scan_h))
+            if 0.18 <= area_ratio <= 0.65:
+                area_score = 1.0
+            elif area_ratio < 0.18:
+                area_score = max(0.0, area_ratio / 0.18)
+            else:
+                area_score = max(0.0, 1.0 - (area_ratio - 0.65) / 0.35)
+
+            min_margin = min(r.x, r.y, max(0, scan_w - r.right), max(0, scan_h - r.bottom))
+            clearance_score = 1.0 if min_margin >= 20 else max(0.0, float(min_margin) / 20.0)
+
+            single_conf = round(0.40 * area_score + 0.35 * aspect_score + 0.25 * clearance_score, 4)
+            diag = {
+                "size_consistency": 1.0,
+                "horizontal_alignment": 1.0,
+                "vertical_alignment": 1.0,
+                "spacing_consistency": 1.0,
+                "candidate_count": 1,
+                "fill_ratio": 1.0,
+                "aspect_match": round(aspect_score, 4),
+                "area_score": round(area_score, 4),
+                "edge_clearance": round(clearance_score, 4),
+            }
+            return single_conf, diag
+
+        # Case 2: Multi-card grid (>= 2 candidates)
+        widths = [r.w for r, _, _ in ordered_grid]
+        heights = [r.h for r, _, _ in ordered_grid]
+        med_w = float(np.median(widths))
+        med_h = float(np.median(heights))
+
+        # Size consistency
+        std_w = float(np.std(widths))
+        std_h = float(np.std(heights))
+        w_score = max(0.0, 1.0 - 2.0 * (std_w / max(1.0, med_w)))
+        h_score = max(0.0, 1.0 - 2.0 * (std_h / max(1.0, med_h)))
+        size_consistency = round((w_score + h_score) / 2.0, 4)
+
+        # Horizontal alignment (row alignment)
+        rows_dict: dict[int, list[Rect]] = {}
+        cols_dict: dict[int, list[Rect]] = {}
+        for r, r_idx, c_idx in ordered_grid:
+            rows_dict.setdefault(r_idx, []).append(r)
+            cols_dict.setdefault(c_idx, []).append(r)
+
+        row_scores = []
+        for r_idx, cards in rows_dict.items():
+            if len(cards) >= 2:
+                y_centers = [c.y + c.h / 2.0 for c in cards]
+                std_y = float(np.std(y_centers))
+                score = max(0.0, 1.0 - (std_y / max(1.0, med_h * 0.15)))
+                row_scores.append(score)
+        horizontal_alignment = round(float(np.mean(row_scores)), 4) if row_scores else 1.0
+
+        # Vertical alignment (column alignment)
+        col_scores = []
+        for c_idx, cards in cols_dict.items():
+            if len(cards) >= 2:
+                x_centers = [c.x + c.w / 2.0 for c in cards]
+                std_x = float(np.std(x_centers))
+                score = max(0.0, 1.0 - (std_x / max(1.0, med_w * 0.15)))
+                col_scores.append(score)
+        vertical_alignment = round(float(np.mean(col_scores)), 4) if col_scores else 1.0
+
+        # Spacing consistency
+        h_steps = []
+        for r_idx, cards in rows_dict.items():
+            if len(cards) >= 2:
+                sorted_c = sorted(cards, key=lambda c: c.x)
+                for i in range(len(sorted_c) - 1):
+                    h_steps.append((sorted_c[i + 1].x + sorted_c[i + 1].w / 2.0) - (sorted_c[i].x + sorted_c[i].w / 2.0))
+
+        v_steps = []
+        for c_idx, cards in cols_dict.items():
+            if len(cards) >= 2:
+                sorted_c = sorted(cards, key=lambda c: c.y)
+                for i in range(len(sorted_c) - 1):
+                    v_steps.append((sorted_c[i + 1].y + sorted_c[i + 1].h / 2.0) - (sorted_c[i].y + sorted_c[i].h / 2.0))
+
+        h_spacing_score = 1.0
+        if len(h_steps) >= 2:
+            med_step = float(np.median(h_steps))
+            std_step = float(np.std(h_steps))
+            h_spacing_score = max(0.0, 1.0 - 2.0 * (std_step / max(1.0, med_step)))
+
+        v_spacing_score = 1.0
+        if len(v_steps) >= 2:
+            med_step = float(np.median(v_steps))
+            std_step = float(np.std(v_steps))
+            v_spacing_score = max(0.0, 1.0 - 2.0 * (std_step / max(1.0, med_step)))
+
+        if len(h_steps) >= 2 and len(v_steps) >= 2:
+            spacing_consistency = round((h_spacing_score + v_spacing_score) / 2.0, 4)
+        elif len(h_steps) >= 2:
+            spacing_consistency = round(h_spacing_score, 4)
+        elif len(v_steps) >= 2:
+            spacing_consistency = round(v_spacing_score, 4)
+        else:
+            spacing_consistency = 1.0
+
+        # Fill ratio
+        max_r = max(r_idx for _, r_idx, _ in ordered_grid) + 1
+        max_c = max(c_idx for _, _, c_idx in ordered_grid) + 1
+        expected_cells = max_r * max_c
+        fill_ratio = round(min(1.0, len(ordered_grid) / float(expected_cells)), 4)
+
+        grid_conf = round(
+            0.30 * size_consistency +
+            0.25 * horizontal_alignment +
+            0.25 * vertical_alignment +
+            0.10 * spacing_consistency +
+            0.10 * fill_ratio,
+            4
+        )
+
+        diag = {
+            "size_consistency": size_consistency,
+            "horizontal_alignment": horizontal_alignment,
+            "vertical_alignment": vertical_alignment,
+            "spacing_consistency": spacing_consistency,
+            "candidate_count": len(ordered_grid),
+            "fill_ratio": fill_ratio,
+        }
+        return grid_conf, diag
+
     def detect(
         self,
         context: DetectionContext,
@@ -255,7 +405,19 @@ class GenericGridDetector:
                 accepted_candidates.append(candidate)
 
         duration_ms = (time.perf_counter() - t0) * 1000.0
-        grid_conf = 0.95 if len(accepted_candidates) >= 2 else (0.80 if len(accepted_candidates) == 1 else 0.50)
+        grid_conf, geom_diag = self.compute_grid_confidence(
+            ordered_grid,
+            scan_w=context.scan_width,
+            scan_h=context.scan_height,
+            profile=active_profile,
+        )
+
+        diagnostics = {
+            "median_w": median_w,
+            "median_h": median_h,
+            "raw_candidates_count": len(candidates_rects),
+            **geom_diag,
+        }
 
         return GridDetectionResult(
             detected=True,
@@ -265,11 +427,7 @@ class GenericGridDetector:
             candidates=all_candidates,
             accepted=accepted_candidates,
             rejected=rejected_candidates,
-            diagnostics={
-                "median_w": median_w,
-                "median_h": median_h,
-                "raw_candidates_count": len(candidates_rects),
-            },
+            diagnostics=diagnostics,
             duration_ms=round(duration_ms, 2),
         )
 

@@ -20,8 +20,9 @@ from .constants import (
     DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION,
     DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD,
     DEFAULT_LOCK_THRESHOLD,
-    DEFAULT_EMPTY_DETAIL_THRESHOLD,
-    DEFAULT_DUPLICATE_THRESHOLD,
+    DEFAULT_EMPTY_CONTENT_THRESHOLD,
+    DEFAULT_DUPLICATE_PHASH_MAX_DISTANCE,
+    DEFAULT_DUPLICATE_MAE_THRESHOLD,
     DEFAULT_MAX_CANVAS_WIDTH,
     DEFAULT_MAX_CANVAS_HEIGHT,
     MIN_COLUMNS,
@@ -50,8 +51,9 @@ class AutoCutSettings:
     classifier_scan_max_dimension: int = DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION
     detector_confidence_threshold: float = DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD
     lock_threshold: float = DEFAULT_LOCK_THRESHOLD
-    empty_detail_threshold: float = DEFAULT_EMPTY_DETAIL_THRESHOLD
-    duplicate_threshold: float = DEFAULT_DUPLICATE_THRESHOLD
+    empty_content_threshold: float = DEFAULT_EMPTY_CONTENT_THRESHOLD
+    duplicate_phash_max_distance: int = DEFAULT_DUPLICATE_PHASH_MAX_DISTANCE
+    duplicate_mae_threshold: float = DEFAULT_DUPLICATE_MAE_THRESHOLD
 
     # Layout Settings
     max_output_size: tuple[int, int] = (DEFAULT_MAX_CANVAS_WIDTH, DEFAULT_MAX_CANVAS_HEIGHT)
@@ -61,6 +63,23 @@ class AutoCutSettings:
     # Color & Diagnostics
     auto_color: str = "preview"  # "off", "preview", "photoshop"
     enable_debug: bool = False
+
+    # Backward-compatibility property aliases
+    @property
+    def empty_detail_threshold(self) -> float:
+        return self.empty_content_threshold
+
+    @empty_detail_threshold.setter
+    def empty_detail_threshold(self, val: float) -> None:
+        self.empty_content_threshold = val
+
+    @property
+    def duplicate_threshold(self) -> float:
+        return self.duplicate_mae_threshold
+
+    @duplicate_threshold.setter
+    def duplicate_threshold(self, val: float) -> None:
+        self.duplicate_mae_threshold = val
 
     def __post_init__(self):
         # Resolve relative paths against DEFAULT_ROOT_DIR for deterministic behavior
@@ -82,11 +101,14 @@ class AutoCutSettings:
             ("classifier_review_threshold", self.classifier_review_threshold),
             ("detector_confidence_threshold", self.detector_confidence_threshold),
             ("lock_threshold", self.lock_threshold),
-            ("empty_detail_threshold", self.empty_detail_threshold),
-            ("duplicate_threshold", self.duplicate_threshold),
+            ("empty_content_threshold", self.empty_content_threshold),
         ]:
             if not 0.0 <= val <= 1.0:
                 raise ConfigurationError(f"{name} must be in [0.0, 1.0], got {val}.")
+        if not (0 <= self.duplicate_phash_max_distance <= 64):
+            raise ConfigurationError(f"duplicate_phash_max_distance must be in [0, 64], got {self.duplicate_phash_max_distance}.")
+        if not (0.1 <= self.duplicate_mae_threshold <= 100.0):
+            raise ConfigurationError(f"duplicate_mae_threshold must be in [0.1, 100.0], got {self.duplicate_mae_threshold}.")
         if self.classifier_review_threshold > self.classifier_accept_threshold:
             raise ConfigurationError("classifier_review_threshold > classifier_accept_threshold.")
         if not (0.0 <= self.classifier_ambiguity_margin <= 0.5):
@@ -116,8 +138,9 @@ class AutoCutSettings:
             "classifier_scan_max_dimension": self.classifier_scan_max_dimension,
             "detector_confidence_threshold": self.detector_confidence_threshold,
             "lock_threshold": self.lock_threshold,
-            "empty_detail_threshold": self.empty_detail_threshold,
-            "duplicate_threshold": self.duplicate_threshold,
+            "empty_content_threshold": self.empty_content_threshold,
+            "duplicate_phash_max_distance": self.duplicate_phash_max_distance,
+            "duplicate_mae_threshold": self.duplicate_mae_threshold,
             "max_output_size": list(self.max_output_size),
             "default_gun_columns": self.default_gun_columns,
             "default_vehicle_rows": self.default_vehicle_rows,
@@ -129,6 +152,32 @@ class AutoCutSettings:
     def from_dict(cls, data: dict[str, Any]) -> "AutoCutSettings":
         max_size_raw = data.get("max_output_size", [DEFAULT_MAX_CANVAS_WIDTH, DEFAULT_MAX_CANVAS_HEIGHT])
         max_size = (int(max_size_raw[0]), int(max_size_raw[1])) if len(max_size_raw) >= 2 else (DEFAULT_MAX_CANVAS_WIDTH, DEFAULT_MAX_CANVAS_HEIGHT)
+
+        # Handle backward compatibility for duplicate thresholds
+        dup_mae = DEFAULT_DUPLICATE_MAE_THRESHOLD
+        if "duplicate_mae_threshold" in data:
+            dup_mae = float(data["duplicate_mae_threshold"])
+        elif "duplicate_threshold" in data:
+            legacy_val = float(data["duplicate_threshold"])
+            # If legacy was normalized 0..1 (like 0.92), migrate safely to new default MAE 12.0
+            if legacy_val <= 1.0:
+                dup_mae = DEFAULT_DUPLICATE_MAE_THRESHOLD
+            else:
+                dup_mae = legacy_val
+
+        dup_phash = int(data.get("duplicate_phash_max_distance", DEFAULT_DUPLICATE_PHASH_MAX_DISTANCE))
+
+        # Handle backward compatibility for empty content threshold
+        empty_content = DEFAULT_EMPTY_CONTENT_THRESHOLD
+        if "empty_content_threshold" in data:
+            empty_content = float(data["empty_content_threshold"])
+        elif "empty_detail_threshold" in data:
+            legacy_val = float(data["empty_detail_threshold"])
+            if legacy_val == 0.15:
+                empty_content = DEFAULT_EMPTY_CONTENT_THRESHOLD
+            else:
+                empty_content = legacy_val
+
         return cls(
             workspace_dir=Path(data.get("workspace_dir", DEFAULT_WORKSPACE_DIR)),
             output_dir=Path(data.get("output_dir", DEFAULT_OUTPUT_DIR)),
@@ -141,8 +190,9 @@ class AutoCutSettings:
             classifier_scan_max_dimension=int(data.get("classifier_scan_max_dimension", DEFAULT_CLASSIFIER_SCAN_MAX_DIMENSION)),
             detector_confidence_threshold=float(data.get("detector_confidence_threshold", DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD)),
             lock_threshold=float(data.get("lock_threshold", DEFAULT_LOCK_THRESHOLD)),
-            empty_detail_threshold=float(data.get("empty_detail_threshold", DEFAULT_EMPTY_DETAIL_THRESHOLD)),
-            duplicate_threshold=float(data.get("duplicate_threshold", DEFAULT_DUPLICATE_THRESHOLD)),
+            empty_content_threshold=empty_content,
+            duplicate_phash_max_distance=dup_phash,
+            duplicate_mae_threshold=dup_mae,
             max_output_size=max_size,
             default_gun_columns=int(data.get("default_gun_columns", 4)),
             default_vehicle_rows=int(data.get("default_vehicle_rows", 2)),

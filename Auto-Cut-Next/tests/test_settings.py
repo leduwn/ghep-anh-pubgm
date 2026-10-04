@@ -93,3 +93,46 @@ def test_settings_atomic_save_no_tmp(tmp_path):
     assert target.is_file()
     assert not target.with_suffix(".tmp").exists()
 
+
+def test_settings_legacy_migration_and_bounds():
+    # 1. Legacy dictionary with duplicate_threshold=0.92 and empty_detail_threshold=0.15
+    legacy_data = {
+        "duplicate_threshold": 0.92,
+        "empty_detail_threshold": 0.15,
+        "detector_confidence_threshold": 0.60,
+    }
+    migrated = AutoCutSettings.from_dict(legacy_data)
+    assert migrated.duplicate_mae_threshold == 12.0
+    assert migrated.empty_content_threshold == 0.35
+    assert migrated.duplicate_phash_max_distance == 10
+
+    # 2. Backward compatibility properties
+    assert migrated.duplicate_threshold == 12.0
+    assert migrated.empty_detail_threshold == 0.35
+
+    # 3. Explicit modern values preserved
+    modern_data = {
+        "duplicate_mae_threshold": 15.5,
+        "empty_content_threshold": 0.42,
+        "duplicate_phash_max_distance": 8,
+    }
+    modern = AutoCutSettings.from_dict(modern_data)
+    assert modern.duplicate_mae_threshold == 15.5
+    assert modern.empty_content_threshold == 0.42
+    assert modern.duplicate_phash_max_distance == 8
+
+    # 4. Bounds validation
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(empty_content_threshold=-0.1)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(empty_content_threshold=1.1)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(duplicate_phash_max_distance=0)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(duplicate_phash_max_distance=65)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(duplicate_mae_threshold=0.0)
+    with pytest.raises(ConfigurationError):
+        AutoCutSettings(duplicate_mae_threshold=150.0)
+
+

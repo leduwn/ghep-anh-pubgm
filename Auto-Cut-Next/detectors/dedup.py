@@ -98,9 +98,19 @@ class AccountDeduplicator:
         self,
         diff_threshold: float = 12.0,
         phash_threshold: int = 10,
+        duplicate_mae_threshold: Optional[float] = None,
+        duplicate_phash_max_distance: Optional[int] = None,
     ):
-        self.diff_threshold = diff_threshold
-        self.phash_threshold = phash_threshold
+        self.diff_threshold = duplicate_mae_threshold if duplicate_mae_threshold is not None else diff_threshold
+        self.phash_threshold = duplicate_phash_max_distance if duplicate_phash_max_distance is not None else phash_threshold
+
+    @property
+    def mae_threshold(self) -> float:
+        return self.diff_threshold
+
+    @property
+    def phash_max_distance(self) -> int:
+        return self.phash_threshold
 
     def deduplicate_session_assets(
         self,
@@ -112,10 +122,11 @@ class AccountDeduplicator:
         if not assets:
             return [], 0
 
-        # Sort assets deterministically: source_index asc, row asc, col asc, asset.id asc
+        # Sort assets deterministically: active items first, then source_index asc, row asc, col asc, asset.id asc
         sorted_assets = sorted(
             assets,
             key=lambda a: (
+                0 if (not a.locked and not a.empty and not a.partial) else 1,
                 source_indices.get(a.source_id, 99999),
                 a.grid_position[0],
                 a.grid_position[1],
@@ -130,6 +141,12 @@ class AccountDeduplicator:
             cat = asset.category.upper()
             if cat not in canonical_by_cat:
                 canonical_by_cat[cat] = []
+
+            # Filtered empty cards do not participate in visual dedup to prevent false duplicate chains
+            if asset.empty:
+                asset.duplicate = False
+                asset.duplicate_of = None
+                continue
 
             tile = source_tiles.get(asset.id)
             if tile is None or tile.size == 0:
@@ -161,6 +178,8 @@ class AccountDeduplicator:
             else:
                 asset.duplicate = False
                 asset.duplicate_of = None
-                canonical_by_cat[cat].append((asset, tile, h))
+                # Only non-empty, non-partial cards may serve as canonical references
+                if not asset.partial:
+                    canonical_by_cat[cat].append((asset, tile, h))
 
         return sorted_assets, duplicates_count

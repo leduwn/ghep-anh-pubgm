@@ -13,7 +13,8 @@ from core.constants import (
     MISC_GRID_VERSION,
 )
 from core.models import ClassificationResult
-from detectors.detector_models import SourceDetectionResult
+from core.detection_state import SourceDetectionResult
+from core.settings import AutoCutSettings
 from core.session import WorkspaceManager
 from app.pipeline import AutoCutPipeline
 
@@ -255,4 +256,100 @@ def test_pipeline_detect_stale_classifier_version(temp_workspace, tmp_path):
     assert det.status == DetectionStatus.ERROR.value
     assert "stale" in det.error_message.lower()
     assert len(session.assets) == 0
+
+
+def test_pipeline_detect_cache_write_error_handled(temp_workspace, tmp_path, monkeypatch):
+    """Confirms cache write failures do not crash detection, log warnings, and increment metrics."""
+    account_id = "test_cache_fail_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    img = make_grid_image(rows=1, cols=2, seed=88)
+    f = tmp_path / "cache_fail_screen.png"
+    cv2.imwrite(str(f), img)
+
+    session = pipeline.ingest_sources(account_id, [f])
+    src_id = next(iter(session.sources.keys()))
+
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.ITEM_SET.value,
+        confidence=0.95,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+
+    # Monkeypatch disk_cache.put to raise an exception simulating disk failure
+    def mock_put_fail(*args, **kwargs):
+        raise OSError("Simulated disk full during cache write")
+
+    monkeypatch.setattr(pipeline.disk_cache, "put", mock_put_fail)
+
+    # Detection must not crash
+    session = pipeline.detect_session(account_id)
+    assert pipeline.metrics.cache_write_errors >= 1
+    assert src_id in session.detections
+    assert session.detections[src_id].status == DetectionStatus.SUCCESS.value
+    assert len(session.assets) == 2
+
+
+def test_pipeline_detect_single_source_decode_during_dedup(temp_workspace, tmp_path):
+    """Confirms each source image is decoded at most once during session deduplication."""
+    account_id = "test_decode_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    # Create 2 screenshots with 4 cards each (8 total assets)
+    f1 = tmp_path / "decode_s1.png"
+    f2 = tmp_path / "decode_s2.png"
+    cv2.imwrite(str(f1), make_grid_image(rows=2, cols=2, seed=101))
+    cv2.imwrite(str(f2), make_grid_image(rows=2, cols=2, seed=102))
+
+    session = pipeline.ingest_sources(account_id, [f1, f2])
+    for sid in session.sources:
+        session.classifications[sid] = ClassificationResult(
+            category=Category.HELMET.value,
+            confidence=0.95,
+            decision=Decision.AUTO_ACCEPT.value,
+            detector_version=CLASSIFIER_VERSION,
+        )
+    temp_workspace.save_session(session)
+
+    pipeline.detect_session(account_id)
+
+    # 8 total assets were cropped, but exactly 2 source decodes must occur during dedup
+    assert len(session.assets) == 8
+    assert pipeline.metrics.source_decodes == 2
+
+
+def test_pipeline_detect_low_grid_confidence_review_policy(temp_workspace, tmp_path):
+    """Confirms detector_confidence_threshold triggers REVIEW status and review_required on assets."""
+    account_id = "test_grid_conf_review_acc"
+    # Set threshold very high (0.999) so synthetic grid confidence falls below it
+    strict_settings = AutoCutSettings(detector_confidence_threshold=0.999)
+    pipeline = AutoCutPipeline(workspace=temp_workspace, settings=strict_settings)
+
+    f = tmp_path / "low_conf_screen.png"
+    cv2.imwrite(str(f), make_grid_image(rows=2, cols=2, seed=202))
+
+    session = pipeline.ingest_sources(account_id, [f])
+    src_id = next(iter(session.sources.keys()))
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.ITEM_SET.value,
+        confidence=0.95,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+
+    pipeline.detect_session(account_id)
+
+    assert src_id in session.detections
+    det = session.detections[src_id]
+    assert det.status == DetectionStatus.REVIEW.value
+    assert any("Grid geometry confidence" in r for r in det.reasons)
+
+    assert len(session.assets) == 4
+    for a in session.assets:
+        assert a.review_required is True
+        assert any("Grid geometry confidence" in r for r in a.review_reasons)
+
 

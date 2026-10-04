@@ -42,6 +42,10 @@ class MetricsCollector:
     duplicates_found: int = 0
     detector_review_required: int = 0
 
+    cache_write_errors: int = 0
+    cache_corruptions: int = 0
+    source_decodes: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0

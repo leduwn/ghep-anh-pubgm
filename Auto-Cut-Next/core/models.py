@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -19,6 +20,7 @@ from .constants import (
     LAYOUT_VERSION,
     validate_confidence,
 )
+from .detection_state import SourceDetectionResult
 from .exceptions import SessionCorruptError
 
 
@@ -516,7 +518,6 @@ class AccountSession:
         for k, v in detections_raw.items():
             if isinstance(v, dict):
                 try:
-                    from detectors.detector_models import SourceDetectionResult
                     detections[k] = SourceDetectionResult.from_dict(v)
                 except Exception:
                     detections[k] = v
