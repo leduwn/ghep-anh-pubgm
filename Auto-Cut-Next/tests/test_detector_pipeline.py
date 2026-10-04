@@ -12,7 +12,8 @@ from core.constants import (
     CLASSIFIER_VERSION,
     MISC_GRID_VERSION,
 )
-from core.models import ClassificationResult, SourceDetectionResult
+from core.models import ClassificationResult
+from detectors.detector_models import SourceDetectionResult
 from core.session import WorkspaceManager
 from app.pipeline import AutoCutPipeline
 
