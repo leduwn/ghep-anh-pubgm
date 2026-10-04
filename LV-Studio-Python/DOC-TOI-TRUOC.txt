@@ -1,0 +1,47 @@
+LV STUDIO - BẢN 19 - TỰ CẮT LINH TINH / GIỮ TỶ LỆ / THÊM CỘT BÊN TRÁI XE
+
+CẬP NHẬT
+1. Tắt app. Copy nội dung LV-Studio-Python vào thư mục mã nguồn cũ, chọn thay file trùng. Không xóa .venv hoặc models.
+2. Bấm BUILD-EXE.cmd, chờ build và kiểm tra hoàn tất. Nếu chưa có môi trường, dùng TAO-EXE-MOI.cmd.
+3. Mở trực tiếp dist/LV-Studio-Python/LV-Studio-Python.exe trong chính thư mục đã build. Đầu app phải hiện GHÉP ACC + SÚNG · 19.
+Không chỉ chép UI vào EXE cũ: bản này thêm bộ tìm ô Python và ảnh mẫu biểu tượng khóa.
+Giữ _internal cạnh EXE; sử dụng hàng ngày không cần CMD. ZIP không chứa model/venv/EXE nên nhỏ; build dùng môi trường đã cài trên máy.
+
+DÙNG LINH TINH
+Có thể để ảnh nguyên màn hình và ảnh đã cắt sẵn chung thư mục LINH TINH.
+Chế độ mặc định Tự nhận diện lưới / ảnh đã cắt: tìm lưới vật phẩm trên từng ảnh, không dùng tọa độ cố định của điện thoại.
+Không cần đủ 6 ô: ảnh có 1, 2, 3... ô hợp lệ vẫn cắt. Tìm tối đa 6 ô hoàn chỉnh, theo hàng từ trên xuống và từ trái sang phải. Bỏ ô khóa và ô trống; tiếp tục tìm ô hợp lệ tiếp theo. Không lấy ô bị cắt cụt ở mép ảnh.
+Bỏ viền gốc bằng cắt vào trong; giữ hình, nền, logo và số trong ô. Viền mới dùng màu/độ dày chung Xe + Linh tinh.
+Áp dụng cho động tác, mũ, dù, hiệu ứng bay, tóc, khuôn mặt theo các mẫu đã gửi.
+Ô cắt xong xuất hiện riêng trong danh sách, chưa tự chọn ghép: bấm + Thêm / Bỏ chọn, kéo đổi thứ tự, bật Ưu tiên và chọn effect nếu muốn.
+Ô tự cắt mặc định Ảnh nhỏ (2 ảnh/hàng). Ảnh đã cắt mặc định Ô lớn; có thể đổi loại từng ảnh.
+Nếu không xác định được lưới: giữ nguyên ảnh và báo trạng thái. Chọn Ảnh đã cắt · giữ nguyên khi đưa vào ảnh ghép/cắt sẵn mà không muốn app phân tích lưới. Chế độ áp dụng cho ảnh nhập tiếp theo; lưu thiết lập nếu muốn dùng mặc định lâu dài.
+Nhận diện lưới và biểu tượng khóa bằng xử lý hình ảnh, không tải thêm mô hình AI nặng hoặc gửi ảnh ra ngoài máy.
+
+XẾP ẢNH
+Giữ nguyên tỷ lệ ảnh, chỉ thu/phóng đồng đều. Không ép tất cả ảnh vào khoảng trống dưới xe.
+Ô nhỏ: 2 ảnh/hàng; ô lớn: 1 ảnh/hàng. Chiều cao hàng theo tỷ lệ ảnh.
+Dùng khoảng trống dưới cột xe cuối trước; đầy thì tạo cột mới bên trái xe. Nhiều đồ hơn sẽ làm khối rộng thêm, không nén méo để nhét vừa.
+Ảnh thường đổi vị trí bằng kéo trong danh sách; bỏ kéo tự do trong khung xem trước.
+Ảnh Ưu tiên vẫn tách riêng, xuất hiện giữa ảnh tổng để kéo; giữ tỷ lệ nội dung khi đổi khung.
+Ảnh tổng tối đa 5000 px mỗi chiều. Khi toàn bộ bố cục lớn hơn sẽ thu nhỏ đồng đều; càng nhiều cột thì từng ô trong ảnh xuất có thể nhỏ hơn.
+
+KẾT QUẢ MẪU
+1000368182: 6 ô động tác.
+1000368219: 6 ô động tác.
+1000368215: 6 ô mũ.
+1000368161: 6 ô dù.
+1000368162: 5 ô hiệu ứng bay.
+1000368232: 6 ô tóc.
+1000368234: 3 ô mặt, bỏ 2 ô khóa.
+1000368217: bỏ hàng balo trên cùng bị lẹm, lấy 6 ô của hai hàng hoàn chỉnh tiếp theo.
+1000368138: lấy đúng 1 ô balo mèo S31 ở giữa, bỏ các mảnh ô quanh mép. Đã kiểm tra ảnh chưa tăng độ phân giải bằng AI ở 3 kích thước.
+Ảnh S29 cận cảnh: lấy 1 ô, bỏ khoảng xám và mảnh ô lân cận.
+Mau-cat-Linh-tinh-19.jpg trong ZIP là ảnh xem nhanh kết quả cắt, không phải ảnh dùng làm nguồn.
+
+KIỂM TRA
+77 bài kiểm tra Python đã qua, gồm các mẫu người dùng ở 3 kích thước, bỏ khóa/ô trống/ảnh đã cắt, lưới dịch chuyển trong khung tỷ lệ khác, native API và HTTP không phụ thuộc OCR khởi động.
+Kiểm tra JavaScript/canvas đã qua: nhập hỗn hợp, bảo toàn ảnh đã cắt, 30 ô nhỏ tràn sang trái mà không đè nhau, không có xe vẫn xếp đúng, UID, nhân vật/VIP+A/B, súng, xe, viền, màu, lưu thiết lập và nạp ảnh song song.
+Build EXE kiểm tra 6 ô Linh tinh bằng API tích hợp, cùng các kiểm tra OCR súng và lưu thiết lập trước khi báo thành công.
+Chưa chạy giao diện EXE trên Windows ở môi trường này. Chưa có ảnh iPad gốc; đã kiểm tra tỷ lệ khác bằng ảnh thử dịch chuyển lưới, không cam kết mọi giao diện/ảnh cuộn đều nhận đúng.
+Giữ tính năng bản 17: VIP+A/B trên nhân vật (không có A/B ở Linh tinh), UID tự động/khoanh vùng, nạp ảnh trực tiếp 4 ảnh cùng lúc, chỉnh màu và các tính năng cũ.

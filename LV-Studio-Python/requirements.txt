@@ -1,0 +1,8 @@
+numpy==1.26.4
+scipy==1.17.0; python_version >= "3.11"
+scipy==1.15.3; python_version < "3.11"
+pillow==11.3.0
+opencv-python-headless==4.10.0.84
+easyocr==1.7.2
+pyinstaller==6.11.1
+pywebview==6.2.1

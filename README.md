@@ -31,7 +31,12 @@ Bộ công cụ tự động cắt, lọc, nhận diện và ghép ảnh trang b
 4. **Ghép Ảnh (`GhepAnh/`):**
    - Module xử lý ghép nối ảnh trang bị nhanh dạng lưới.
 
-5. **Dọn Rác (`don_dep_rac.py`):**
+5. **LV Studio Python (`LV-Studio-Python/`):**
+   - Ứng dụng Desktop UI / Web UI (Bản 19) hỗ trợ ghép Account + Súng toàn diện.
+   - Tính năng tự nhận diện lưới linh tinh (động tác, mũ, dù, tóc, mặt...), tự động bỏ ô khóa/ô trống và giữ nguyên tỷ lệ ảnh.
+   - Hỗ trợ xếp cột linh hoạt, gắn VIP / Star, trích xuất UID, chỉnh màu GPU / WebGL2 và xuất bản thành phẩm.
+
+6. **Dọn Rác (`don_dep_rac.py`):**
    - Script dọn dẹp các tệp tạm thời, bộ nhớ đệm `__pycache__` và dữ liệu trung gian giữa các phiên chạy.
 
 ## Cài Đặt

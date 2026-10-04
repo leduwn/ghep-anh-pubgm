@@ -14,6 +14,19 @@ DienLV/standalone/
 **/standalone/
 *.exe
 
+# Virtual environments, models and build output
+.venv/
+**/.venv/
+build/
+**/build/
+dist/
+**/dist/
+_internal/
+**/_internal/
+models/
+**/models/
+*.spec
+
 # Exclude backup or IDE caches
 .code-review-graph/
 **/.code-review-graph/
@@ -67,3 +80,4 @@ DienLV/[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][
 !assets/**
 !**/assets/
 !**/assets/**
+!LV-Studio-Python/ui/sample.jpg
