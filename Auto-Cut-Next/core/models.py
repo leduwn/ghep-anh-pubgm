@@ -283,6 +283,10 @@ class DetectedAsset:
     review_required: bool = False
     review_reasons: list[str] = field(default_factory=list)
     order: int = 0
+    raw_crop_rect: Optional[Rect] = None
+    duplicate_of: Optional[str] = None
+    quality_scores: dict[str, float] = field(default_factory=dict)
+    grid_position: tuple[int, int] = (0, 0)
 
     def __post_init__(self):
         self.confidence = validate_confidence(self.confidence, "confidence")
@@ -290,12 +294,19 @@ class DetectedAsset:
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["crop_rect"] = self.crop_rect.to_dict()
+        if self.raw_crop_rect is not None:
+            result["raw_crop_rect"] = self.raw_crop_rect.to_dict()
         return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DetectedAsset":
         crop_data = data.get("crop_rect", {})
         rect = Rect.from_dict(crop_data) if isinstance(crop_data, dict) else Rect(0, 0, 0, 0)
+        raw_crop_data = data.get("raw_crop_rect")
+        raw_rect = Rect.from_dict(raw_crop_data) if isinstance(raw_crop_data, dict) else None
+        grid_pos_raw = data.get("grid_position", [0, 0])
+        grid_pos = tuple(grid_pos_raw) if isinstance(grid_pos_raw, (list, tuple)) and len(grid_pos_raw) == 2 else (0, 0)
+
         return cls(
             id=str(data["id"]),
             source_id=str(data["source_id"]),
@@ -315,7 +326,18 @@ class DetectedAsset:
             review_required=bool(data.get("review_required", False)),
             review_reasons=list(data.get("review_reasons", [])),
             order=int(data.get("order", 0)),
+            raw_crop_rect=raw_rect,
+            duplicate_of=data.get("duplicate_of"),
+            quality_scores=dict(data.get("quality_scores", {})),
+            grid_position=grid_pos,
         )
+
+
+def generate_asset_id(source_sha: str, category: str, detector: str, detector_version: str, rect: Rect) -> str:
+    """Produces a deterministic, stable identifier for an extracted asset."""
+    token = f"{source_sha}:{category}:{detector}:{detector_version}:{rect.x}:{rect.y}:{rect.w}:{rect.h}"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
 
 
 
@@ -329,6 +351,7 @@ class AccountSession:
     sources: dict[str, SourceImage] = field(default_factory=dict)
     assets: list[DetectedAsset] = field(default_factory=list)
     classifications: dict[str, ClassificationResult] = field(default_factory=dict)
+    detections: dict[str, Any] = field(default_factory=dict)
     uid: Optional[str] = None
     uid_confidence: float = 0.0
     layout_settings: dict[str, Any] = field(default_factory=dict)
@@ -409,10 +432,15 @@ class AccountSession:
             return self.sources[src_id]
         return None
 
-    def invalidate_source_products(self, source_id: str) -> int:
-        """Invalidates and removes all downstream detected assets derived from source_id."""
+    def invalidate_source_products(self, source_id: str, detector: Optional[str] = None) -> int:
+        """Invalidates and removes downstream detected assets derived from source_id, optionally filtered by detector."""
         initial_count = len(self.assets)
-        self.assets = [a for a in self.assets if a.source_id != source_id]
+        if detector:
+            self.assets = [a for a in self.assets if not (a.source_id == source_id and a.detector == detector)]
+        else:
+            self.assets = [a for a in self.assets if a.source_id != source_id]
+            if source_id in self.detections:
+                del self.detections[source_id]
         removed = initial_count - len(self.assets)
         if removed > 0:
             self.touch()
@@ -460,6 +488,7 @@ class AccountSession:
             "sources": {k: v.to_dict() for k, v in self.sources.items()},
             "assets": [a.to_dict() for a in self.assets],
             "classifications": {k: v.to_dict() for k, v in self.classifications.items()},
+            "detections": {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in self.detections.items()},
             "uid": self.uid,
             "uid_confidence": self.uid_confidence,
             "layout_settings": self.layout_settings,
@@ -482,6 +511,18 @@ class AccountSession:
         classifications_raw = data.get("classifications", {})
         classifications = {k: ClassificationResult.from_dict(v) for k, v in classifications_raw.items()}
 
+        detections_raw = data.get("detections", {})
+        detections = {}
+        for k, v in detections_raw.items():
+            if isinstance(v, dict):
+                try:
+                    from detectors.detector_models import SourceDetectionResult
+                    detections[k] = SourceDetectionResult.from_dict(v)
+                except Exception:
+                    detections[k] = v
+            else:
+                detections[k] = v
+
         return cls(
             account_id=str(data["account_id"]),
             version=int(data.get("version", SESSION_SCHEMA_VERSION)),
@@ -490,6 +531,7 @@ class AccountSession:
             sources=sources,
             assets=assets,
             classifications=classifications,
+            detections=detections,
             uid=data.get("uid"),
             uid_confidence=float(data.get("uid_confidence", 0.0)),
             layout_settings=dict(data.get("layout_settings", {})),

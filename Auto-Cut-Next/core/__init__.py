@@ -13,6 +13,7 @@ from .constants import (
     Decision,
     Stage,
     SourceStatus,
+    DetectionStatus,
     SUPPORTED_IMAGE_EXTENSIONS,
 )
 from .exceptions import (
@@ -56,6 +57,7 @@ __all__ = [
     "Decision",
     "Stage",
     "SourceStatus",
+    "DetectionStatus",
     "SUPPORTED_IMAGE_EXTENSIONS",
     "AutoCutError",
     "IngestError",

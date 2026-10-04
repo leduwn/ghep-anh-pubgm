@@ -1,0 +1,166 @@
+"""Perceptual hashing and two-stage visual deduplication engine."""
+
+from __future__ import annotations
+
+from typing import Any, Optional, Union
+import cv2
+import numpy as np
+
+from core.models import DetectedAsset, Rect
+from core.constants import DEFAULT_DUPLICATE_THRESHOLD
+
+
+def compute_phash(tile_bgr: np.ndarray) -> int:
+    """Computes a 64-bit perceptual hash (pHash) on the central 70% of the tile using 2D DCT."""
+    if tile_bgr is None or tile_bgr.size == 0:
+        return 0
+
+    h, w = tile_bgr.shape[:2]
+    # Central 70% to ignore borders
+    y1, y2 = int(round(h * 0.15)), max(int(round(h * 0.15)) + 1, int(round(h * 0.85)))
+    x1, x2 = int(round(w * 0.15)), max(int(round(w * 0.15)) + 1, int(round(w * 0.85)))
+    central = tile_bgr[y1:y2, x1:x2]
+
+    gray = cv2.cvtColor(central, cv2.COLOR_BGR2GRAY)
+    resized = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+    dct = cv2.dct(resized)
+    # Extract top-left 8x8 low-frequency coefficients
+    dct_low = dct[:8, :8]
+    # Exclude DC coefficient at [0,0] from median calculation
+    med = float(np.median(dct_low.flatten()[1:]))
+
+    # Construct 64-bit integer
+    bit_arr = (dct_low > med).flatten()
+    hash_val = 0
+    for b in bit_arr:
+        hash_val = (hash_val << 1) | int(b)
+    return hash_val
+
+
+def compute_visual_core(tile_bgr: np.ndarray) -> np.ndarray:
+    """Extracts a normalized 48x48 grayscale feature array from central 70%."""
+    if tile_bgr is None or tile_bgr.size == 0:
+        return np.zeros((48, 48), dtype=np.float32)
+
+    h, w = tile_bgr.shape[:2]
+    y1, y2 = int(round(h * 0.15)), max(int(round(h * 0.15)) + 1, int(round(h * 0.85)))
+    x1, x2 = int(round(w * 0.15)), max(int(round(w * 0.15)) + 1, int(round(w * 0.85)))
+    central = tile_bgr[y1:y2, x1:x2]
+
+    gray = cv2.cvtColor(central, cv2.COLOR_BGR2GRAY)
+    thumb = cv2.resize(gray, (48, 48), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+    # Normalize contrast/brightness
+    mean_val = float(np.mean(thumb))
+    std_val = float(np.std(thumb))
+    if std_val > 1e-4:
+        norm = (thumb - mean_val) / std_val
+    else:
+        norm = thumb - mean_val
+    return norm
+
+
+def hamming_distance(h1: int, h2: int) -> int:
+    """Calculates bitwise Hamming distance between two 64-bit integers."""
+    return bin(h1 ^ h2).count("1")
+
+
+def are_visually_identical(
+    tile_a: np.ndarray,
+    tile_b: np.ndarray,
+    hash_a: Optional[int] = None,
+    hash_b: Optional[int] = None,
+    diff_threshold: float = 12.0,
+    phash_threshold: int = 10,
+) -> tuple[bool, float, int]:
+    """Two-stage duplicate check: fast pHash shortlist followed by normalized MAE confirmation."""
+    ha = hash_a if hash_a is not None else compute_phash(tile_a)
+    hb = hash_b if hash_b is not None else compute_phash(tile_b)
+
+    dist = hamming_distance(ha, hb)
+    if dist > phash_threshold:
+        return False, 999.0, dist
+
+    norm_a = compute_visual_core(tile_a)
+    norm_b = compute_visual_core(tile_b)
+
+    # Scaled MAE
+    mae = float(np.mean(np.abs(norm_a - norm_b))) * 25.0
+    is_dup = (dist <= 6 and mae < diff_threshold * 1.5) or (mae < diff_threshold)
+    return is_dup, mae, dist
+
+
+class AccountDeduplicator:
+    """Manages category-scoped, account-level asset deduplication across screenshots."""
+
+    def __init__(
+        self,
+        diff_threshold: float = 12.0,
+        phash_threshold: int = 10,
+    ):
+        self.diff_threshold = diff_threshold
+        self.phash_threshold = phash_threshold
+
+    def deduplicate_session_assets(
+        self,
+        assets: list[DetectedAsset],
+        source_tiles: dict[str, np.ndarray],  # map asset_id -> original tile BGR
+        source_indices: dict[str, int],      # map source_id -> source_index
+    ) -> tuple[list[DetectedAsset], int]:
+        """Runs deterministic category-scoped deduplication across all session assets."""
+        if not assets:
+            return [], 0
+
+        # Sort assets deterministically: source_index asc, row asc, col asc, asset.id asc
+        sorted_assets = sorted(
+            assets,
+            key=lambda a: (
+                source_indices.get(a.source_id, 99999),
+                a.grid_position[0],
+                a.grid_position[1],
+                a.id,
+            ),
+        )
+
+        canonical_by_cat: dict[str, list[tuple[DetectedAsset, np.ndarray, int]]] = {}
+        duplicates_count = 0
+
+        for asset in sorted_assets:
+            cat = asset.category.upper()
+            if cat not in canonical_by_cat:
+                canonical_by_cat[cat] = []
+
+            tile = source_tiles.get(asset.id)
+            if tile is None or tile.size == 0:
+                asset.duplicate = False
+                asset.duplicate_of = None
+                continue
+
+            # Compute hash once
+            h = compute_phash(tile)
+            matched_canonical_id: Optional[str] = None
+
+            for can_asset, can_tile, can_h in canonical_by_cat[cat]:
+                is_dup, _, _ = are_visually_identical(
+                    tile,
+                    can_tile,
+                    hash_a=h,
+                    hash_b=can_h,
+                    diff_threshold=self.diff_threshold,
+                    phash_threshold=self.phash_threshold,
+                )
+                if is_dup:
+                    matched_canonical_id = can_asset.id
+                    break
+
+            if matched_canonical_id is not None:
+                asset.duplicate = True
+                asset.duplicate_of = matched_canonical_id
+                duplicates_count += 1
+            else:
+                asset.duplicate = False
+                asset.duplicate_of = None
+                canonical_by_cat[cat].append((asset, tile, h))
+
+        return sorted_assets, duplicates_count

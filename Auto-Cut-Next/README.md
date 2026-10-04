@@ -93,14 +93,20 @@ python Auto-Cut-Next/run.py ingest <ACCOUNT_ID> <PATH_TO_SCREENSHOT_FOLDER>
 python Auto-Cut-Next/run.py classify <ACCOUNT_ID> [--force] [--json]
 ```
 
+### Detecting Cards & Inventory Grids:
+```bash
+python Auto-Cut-Next/run.py detect <ACCOUNT_ID> [--force] [--json] [--verbose]
+```
+
 ### Viewing Account Session Info:
 ```bash
 python Auto-Cut-Next/run.py info <ACCOUNT_ID>
 ```
 
-### Running Benchmark:
+### Running Benchmarks:
 ```bash
 python Auto-Cut-Next/scripts/benchmark_classifier.py
+python Auto-Cut-Next/scripts/benchmark_detector.py
 ```
 
 ### Running Test Suite:
@@ -119,7 +125,15 @@ python -m pytest Auto-Cut-Next/tests -v
   - Decision Policy: `AUTO_ACCEPT` (score >= 0.85), `REVIEW` (0.55 <= score < 0.85 or ambiguity margin < 0.10), `UNKNOWN` (score < 0.55), `ERROR`.
   - Session Persistence: Results stored directly under `session.classifications`, versioned (`CLASSIFIER_VERSION = 2.0.0`), invalidated upon force ingest.
   - Microbenchmark: ~25 ms classify compute / ~38 ms end-to-end per 1080p source.
-- **Milestone 3 — Detector Core**: Planned.
+- **Milestone 3 — Generic Detector Core & Card Quality Pipeline**: Completed.
+  - `VisionContext` & `DetectionContext`: Unified single-decode scan downsampling (1600px max) with exact coordinate projection between scan space and full-resolution space.
+  - `CardGeometryProfile`: Configurable aspect ratio (0.60–1.30), size constraints, spacing ratios (0.85–1.35), border insets, and deterministic SHA-256 fingerprint for cache invalidation.
+  - `GenericGridDetector`: Morphological contrast segmentation, connected components, coherent multi-row/multi-column grid reconstruction, regular spacing validation, single-card fallback, and adaptive border trimming.
+  - `CardQualityEvaluator`: Corner binary lock template matching (`lock_mask.png`, IoU >= 0.50), central high-frequency detail analysis for empty slot detection, partial card aspect degradation scoring, and review uncertainty thresholds.
+  - `AccountDeduplicator`: 64-bit 2D DCT perceptual hashing (pHash) with fast shortlist filtering and normalized MAE verification; category-scoped, deterministic account-level deduplication preserving canonical first-seen assets.
+  - Pipeline & Orchestration: `pipeline.detect_session` with disk caching (`MISC_GRID_VERSION = 3.0.0`), category gating (eligible: `ITEM_SET`, `HELMET`, `BACKPACK`, `MASK`, `GRENADE`, `PARACHUTE`, `EMOTE`, `MISC`; deferred to M4: `GUN`, `VEHICLE`, `OUTFIT`), periodic session checkpointing, and CLI `detect` command.
+  - Test Coverage & Performance: Comprehensive pytest suite across models, quality, dedup, grid reconstruction, and pipeline persistence; microbenchmark achieving ~69 ms end-to-end per 2778x1284 native screen.
+- **Milestone 4 — Specialized Detectors**: Planned (Gun Lab layout & level badge, Vehicle grid & ceiling mask, Outfit VIP/Mythic).
 - **Milestone 4 — Specialized Detectors**: Planned.
 - **Milestone 5 — Cascade OCR**: Planned.
 - **Milestone 6 — Review System**: Planned.

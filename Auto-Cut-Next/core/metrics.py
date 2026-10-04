@@ -25,6 +25,23 @@ class MetricsCollector:
     classify_unknown: int = 0
     classify_errors: int = 0
 
+    detect_sources_seen: int = 0
+    detect_sources_processed: int = 0
+    detect_sources_cached: int = 0
+    detect_sources_deferred: int = 0
+    detect_sources_no_grid: int = 0
+    detect_sources_errors: int = 0
+
+    candidates_found: int = 0
+    assets_created: int = 0
+
+    locked_found: int = 0
+    empty_found: int = 0
+    partial_found: int = 0
+
+    duplicates_found: int = 0
+    detector_review_required: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0
@@ -83,6 +100,18 @@ class MetricsCollector:
             f"Classify Review:    {self.classify_review}",
             f"Classify Unknown:   {self.classify_unknown}",
             f"Classify Errors:    {self.classify_errors}",
+            f"Detect Processed:   {self.detect_sources_processed}",
+            f"Detect Cached:      {self.detect_sources_cached}",
+            f"Detect Deferred:    {self.detect_sources_deferred}",
+            f"Detect No Grid:     {self.detect_sources_no_grid}",
+            f"Detect Errors:      {self.detect_sources_errors}",
+            f"Candidates Found:   {self.candidates_found}",
+            f"Assets Created:     {self.assets_created}",
+            f"Locked Found:       {self.locked_found}",
+            f"Empty Found:        {self.empty_found}",
+            f"Partial Found:      {self.partial_found}",
+            f"Duplicates Found:   {self.duplicates_found}",
+
             f"Assets Detected:    {self.assets_detected}",
             f"Locked Skipped:     {self.locked_skipped}",
             f"Partial Skipped:    {self.partial_skipped}",

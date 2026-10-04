@@ -12,7 +12,7 @@ SESSION_SCHEMA_VERSION = 1
 # Subsystem Versions (used for cache invalidation)
 CLASSIFIER_VERSION = "2.0.0"
 GUN_DETECTOR_VERSION = "1.0.0"
-MISC_GRID_VERSION = "1.0.0"
+MISC_GRID_VERSION = "2.0.0"
 OCR_VERSION = "1.0.0"
 LAYOUT_VERSION = "1.0.0"
 
@@ -77,6 +77,17 @@ class Decision(str, Enum):
     REVIEW = "REVIEW"
     UNKNOWN = "UNKNOWN"
     ERROR = "ERROR"
+
+
+class DetectionStatus(str, Enum):
+    """Detection process status for a source image."""
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    NO_GRID = "NO_GRID"
+    REVIEW = "REVIEW"
+    ERROR = "ERROR"
+    DEFERRED = "DEFERRED"
+
 
 # Threshold Defaults
 DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD = 0.85

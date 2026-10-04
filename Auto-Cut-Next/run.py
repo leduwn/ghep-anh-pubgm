@@ -20,15 +20,15 @@ from app.pipeline import AutoCutPipeline
 
 
 def run_self_test() -> int:
-    """Verifies environment, imports, models, settings, atomic session, cache, logger, and classifier smoke test."""
+    """Verifies environment, imports, models, settings, atomic session, cache, logger, classifier, and generic detector."""
     print("=" * 60)
-    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 2)")
+    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 3)")
     print("=" * 60)
 
     import tempfile
 
     # 1. Imports
-    print("[1/7] Checking core imports...")
+    print("[1/8] Checking core imports...")
     try:
         from core.models import SourceImage, Rect, DetectedAsset, AccountSession
         from core.ingest import ImageIngestor
@@ -40,7 +40,7 @@ def run_self_test() -> int:
         return 1
 
     # 2. Settings validation & canonical default loading
-    print("[2/7] Validating settings & canonical default...")
+    print("[2/8] Validating settings & canonical default...")
     try:
         settings = AutoCutSettings.load_default()
         settings.validate()
@@ -53,7 +53,7 @@ def run_self_test() -> int:
         return 1
 
     # 3. Workspace atomic session write
-    print("[3/7] Testing atomic workspace session write & schema check...")
+    print("[3/8] Testing atomic workspace session write & schema check...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             ws = WorkspaceManager(temp_dir)
@@ -69,7 +69,7 @@ def run_self_test() -> int:
         return 1
 
     # 4. Ingestor & Sandbox enforcement
-    print("[4/7] Checking ingestor & sandbox traversal protection...")
+    print("[4/8] Checking ingestor & sandbox traversal protection...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -92,7 +92,7 @@ def run_self_test() -> int:
         return 1
 
     # 5. Atomic DiskCache & corruption recovery
-    print("[5/7] Testing atomic disk cache & corruption recovery...")
+    print("[5/8] Testing atomic disk cache & corruption recovery...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = DiskCache(temp_dir)
@@ -110,7 +110,7 @@ def run_self_test() -> int:
         return 1
 
     # 6. Logger isolation & lifecycle
-    print("[6/7] Testing logger instance isolation & cleanup...")
+    print("[6/8] Testing logger instance isolation & cleanup...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -136,7 +136,7 @@ def run_self_test() -> int:
         return 1
 
     # 7. Classifier smoke test
-    print("[7/7] Testing screen classifier initialization & smoke categorization...")
+    print("[7/8] Testing screen classifier initialization & smoke categorization...")
     try:
         import numpy as np
         from core.constants import Category, Decision
@@ -154,8 +154,34 @@ def run_self_test() -> int:
         print(f"      FAIL: Classifier smoke test error: {exc}")
         return 1
 
+    # 8. Generic grid detector smoke test
+    print("[8/8] Testing generic grid detector & card quality smoke test...")
+    try:
+        import cv2
+        import numpy as np
+        from detectors import DetectionContext, GenericDetector
+        # Create synthetic canvas with 2 dark tiles in a row
+        img = np.zeros((400, 600, 3), dtype=np.uint8)
+        img[:, :] = (180, 180, 180)
+        for col in range(2):
+            x = 50 + col * 150
+            cv2.rectangle(img, (x, 50), (x + 120, 170), (40, 40, 40), -1)
+            cv2.rectangle(img, (x + 20, 70), (x + 100, 150), (80, 20, 40), -1)
+            cv2.circle(img, (x + 60, 110), 20, (240, 240, 240), -1)
+
+        ctx = DetectionContext(img)
+        detector = GenericDetector()
+        grid_res = detector.detect_grid(ctx)
+        ctx.close()
+        assert grid_res.detected
+        assert len(grid_res.candidates) >= 2
+        print(f"      PASS: Generic grid detector smoke test passed (found {len(grid_res.candidates)} cards, grid={grid_res.rows}x{grid_res.columns}).")
+    except Exception as exc:
+        print(f"      FAIL: Generic detector smoke test error: {exc}")
+        return 1
+
     print("=" * 60)
-    print("      ALL 7 SELF-TESTS PASSED SUCCESSFULLY!")
+    print("      ALL 8 SELF-TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
     return 0
 
@@ -181,6 +207,13 @@ def main() -> int:
     classify_p.add_argument("--force", action="store_true", help="Force reclassification of sources")
     classify_p.add_argument("--verbose", action="store_true", help="Verbose logging")
     classify_p.add_argument("--json", action="store_true", dest="json_output", help="Output summary as JSON")
+
+    # Command: detect
+    detect_p = subparsers.add_parser("detect", help="Run generic card grid detection on classified screens")
+    detect_p.add_argument("account", help="Account identifier")
+    detect_p.add_argument("--force", action="store_true", help="Force redetection of sources")
+    detect_p.add_argument("--verbose", action="store_true", help="Verbose logging")
+    detect_p.add_argument("--json", action="store_true", dest="json_output", help="Output summary as JSON")
 
     # Command: info
     info_p = subparsers.add_parser("info", help="Display account session summary")
@@ -269,6 +302,65 @@ def main() -> int:
         print(f"Time: {elapsed:.2f} s")
         return 0
 
+    if args.command == "detect":
+        import json
+        import time
+
+        ws = WorkspaceManager()
+        if not ws.session_exists(args.account):
+            print(f"Error: No session found for account '{args.account}'. Run ingest and classify first.", file=sys.stderr)
+            return 1
+
+        pipeline = AutoCutPipeline()
+        t0 = time.perf_counter()
+        session = pipeline.detect_session(args.account, force=args.force)
+        elapsed = time.perf_counter() - t0
+
+        eligible_count = sum(1 for d in session.detections.values() if d.status != "DEFERRED")
+        processed_count = pipeline.metrics.detect_sources_processed + pipeline.metrics.detect_sources_cached
+        total_cards = len(session.assets)
+        active_cards = sum(1 for a in session.assets if not (a.locked or a.empty or a.partial or a.duplicate))
+        locked_cards = sum(1 for a in session.assets if a.locked)
+        empty_cards = sum(1 for a in session.assets if a.empty)
+        partial_cards = sum(1 for a in session.assets if a.partial)
+        duplicate_cards = sum(1 for a in session.assets if a.duplicate)
+        review_cards = sum(1 for a in session.assets if a.review_required)
+        no_grid_count = sum(1 for d in session.detections.values() if d.status == "NO_GRID")
+        error_count = sum(1 for d in session.detections.values() if d.status == "ERROR")
+
+        if args.json_output:
+            data = {
+                "account": args.account,
+                "sources_eligible": eligible_count,
+                "processed": processed_count,
+                "cards_found": total_cards,
+                "active": active_cards,
+                "locked": locked_cards,
+                "empty": empty_cards,
+                "partial": partial_cards,
+                "duplicates": duplicate_cards,
+                "review": review_cards,
+                "no_grid": no_grid_count,
+                "errors": error_count,
+                "time_seconds": round(elapsed, 2),
+            }
+            print(json.dumps(data, indent=2))
+            return 0
+
+        print(f"Account: {args.account}\n")
+        print(f"Sources eligible: {eligible_count}")
+        print(f"Processed:        {processed_count}\n")
+        print(f"Cards found:      {total_cards}")
+        print(f"Active:           {active_cards}")
+        print(f"Locked:           {locked_cards}")
+        print(f"Empty:            {empty_cards}")
+        print(f"Partial:          {partial_cards}")
+        print(f"Duplicates:       {duplicate_cards}")
+        print(f"Review:           {review_cards}\n")
+        print(f"No grid:          {no_grid_count}")
+        print(f"Errors:           {error_count}")
+        return 0
+
     if args.command == "info":
         from core.constants import Decision
         ws = WorkspaceManager()
@@ -282,15 +374,28 @@ def main() -> int:
         unk_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.UNKNOWN.value)
         err_cnt = sum(1 for c in session.classifications.values() if c.decision == Decision.ERROR.value)
 
+        detected_cnt = len(session.detections)
+        active_assets = sum(1 for a in session.assets if not (a.locked or a.empty or a.partial or a.duplicate))
+        locked_assets = sum(1 for a in session.assets if a.locked)
+        empty_assets = sum(1 for a in session.assets if a.empty)
+        partial_assets = sum(1 for a in session.assets if a.partial)
+        duplicate_assets = sum(1 for a in session.assets if a.duplicate)
+        review_assets = sum(1 for a in session.assets if a.review_required)
+
         print(f"Account:    {session.account_id}")
         print(f"Version:    {session.version}")
         print(f"Sources:    {len(session.sources)}")
         print(f"Classified: {len(session.classifications)}")
-        print(f"Auto:       {auto_cnt}")
-        print(f"Review:     {rev_cnt}")
-        print(f"Unknown:    {unk_cnt}")
-        print(f"Errors:     {err_cnt}")
-        print(f"Assets:     {len(session.assets)}")
+        print(f"Detected:   {detected_cnt}")
+        print()
+        print(f"Assets total: {len(session.assets)}")
+        print(f"Active:       {active_assets}")
+        print(f"Locked:       {locked_assets}")
+        print(f"Empty:        {empty_assets}")
+        print(f"Partial:      {partial_assets}")
+        print(f"Duplicate:    {duplicate_assets}")
+        print(f"Review:       {review_assets}")
+        print()
         print(f"UID:        {session.uid or 'N/A'}")
         print(f"Created:    {session.created_at}")
         print(f"Updated:    {session.updated_at}")
