@@ -64,10 +64,12 @@ def compute_lock_score(tile_bgr: np.ndarray) -> tuple[float, dict[str, Any]]:
         inter = np.count_nonzero(scaled_mask & template)
         union = np.count_nonzero(scaled_mask | template)
         iou = float(inter) / float(max(1, union))
+        precision = float(inter) / float(max(1, np.count_nonzero(scaled_mask)))
+        score = iou * precision
 
-        if iou > best_score:
-            best_score = iou
-            best_stats = {"w": w, "h": h, "area": area, "iou": iou}
+        if score > best_score:
+            best_score = score
+            best_stats = {"w": w, "h": h, "area": area, "iou": iou, "precision": precision}
 
     return best_score, best_stats
 
@@ -85,7 +87,7 @@ def compute_content_score(tile_bgr: np.ndarray) -> tuple[float, float]:
     # Focus on central area (10:54, 10:54) to ignore border edges
     central_detail = detail[10:54, 10:54]
     max_channel_detail = np.max(central_detail, axis=2)
-    detail_ratio = float(np.mean(max_channel_detail > 14.0))
+    detail_ratio = float(np.mean(max_channel_detail > 4.0))
 
     normalized_score = min(1.0, detail_ratio / 0.05)
     return normalized_score, detail_ratio

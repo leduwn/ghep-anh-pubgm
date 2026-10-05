@@ -32,6 +32,19 @@ class MetricsCollector:
     detect_sources_no_grid: int = 0
     detect_sources_errors: int = 0
 
+    # Specialized and Fallback Metrics
+    specialized_attempted: int = 0
+    specialized_success: int = 0
+    specialized_review: int = 0
+    fallback_attempted: int = 0
+    fallback_success: int = 0
+    gun_detected: int = 0
+    vehicle_detected: int = 0
+    outfit_detected: int = 0
+    equipment_detected: int = 0
+    accessory_detected: int = 0
+    inventory_detected: int = 0
+
     candidates_found: int = 0
     assets_created: int = 0
 

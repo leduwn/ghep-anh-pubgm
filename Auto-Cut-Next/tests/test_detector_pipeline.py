@@ -50,7 +50,7 @@ def test_pipeline_detect_category_gating_and_deferred(temp_workspace, tmp_path):
     account_id = "test_gating_acc"
     pipeline = AutoCutPipeline(workspace=temp_workspace)
 
-    # Create 2 source images: one Gun (specialized), one ItemSet (generic)
+    # Create 2 source images: one Gun, one ItemSet
     gun_img = make_grid_image(seed=1)
     gun_file = tmp_path / "gun_screen.png"
     cv2.imwrite(str(gun_file), gun_img)
@@ -81,10 +81,12 @@ def test_pipeline_detect_category_gating_and_deferred(temp_workspace, tmp_path):
     # Run detection
     pipeline.detect_session(account_id)
 
-    # Verify Gun is deferred to M4
+    # Verify Gun is routed with GunDetector primary and fallback executed on generic grid
     assert gun_src_id in session.detections
     gun_det = session.detections[gun_src_id]
-    assert gun_det.status == DetectionStatus.DEFERRED.value
+    assert gun_det.primary_detector == "gun_workshop_detector"
+    assert gun_det.fallback_used is True
+    assert gun_det.card_count == 4
 
     # Verify ItemSet is detected with grid
     assert item_src_id in session.detections
@@ -93,9 +95,8 @@ def test_pipeline_detect_category_gating_and_deferred(temp_workspace, tmp_path):
     assert item_det.card_count == 4
     assert item_det.active_count == 4
 
-    # Verify assets in session
-    assert len(session.assets) == 4
-    assert all(a.source_id == item_src_id for a in session.assets)
+    # Verify assets in session from both sources
+    assert len(session.assets) == 8
 
 
 def test_pipeline_detect_caching_and_persistence(temp_workspace, tmp_path):

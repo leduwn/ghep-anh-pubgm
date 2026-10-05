@@ -105,8 +105,8 @@ class AutoCutSettings:
         ]:
             if not 0.0 <= val <= 1.0:
                 raise ConfigurationError(f"{name} must be in [0.0, 1.0], got {val}.")
-        if not (0 <= self.duplicate_phash_max_distance <= 64):
-            raise ConfigurationError(f"duplicate_phash_max_distance must be in [0, 64], got {self.duplicate_phash_max_distance}.")
+        if not (1 <= self.duplicate_phash_max_distance <= 64):
+            raise ConfigurationError(f"duplicate_phash_max_distance must be in [1, 64], got {self.duplicate_phash_max_distance}.")
         if not (0.1 <= self.duplicate_mae_threshold <= 100.0):
             raise ConfigurationError(f"duplicate_mae_threshold must be in [0.1, 100.0], got {self.duplicate_mae_threshold}.")
         if self.classifier_review_threshold > self.classifier_accept_threshold:

@@ -107,6 +107,7 @@ python Auto-Cut-Next/run.py info <ACCOUNT_ID>
 ```bash
 python Auto-Cut-Next/scripts/benchmark_classifier.py
 python Auto-Cut-Next/scripts/benchmark_detector.py
+python Auto-Cut-Next/scripts/benchmark_specialized_detectors.py
 ```
 
 ### Running Test Suite:
@@ -131,10 +132,19 @@ python -m pytest Auto-Cut-Next/tests -v
   - `GenericGridDetector`: Morphological contrast segmentation, connected components, coherent multi-row/multi-column grid reconstruction, regular spacing validation, single-card fallback, and adaptive border trimming.
   - `CardQualityEvaluator`: Corner binary lock template matching (`lock_mask.png`, IoU >= 0.50), central high-frequency detail analysis for empty slot detection, partial card aspect degradation scoring, and review uncertainty thresholds.
   - `AccountDeduplicator`: 64-bit 2D DCT perceptual hashing (pHash) with fast shortlist filtering and normalized MAE verification; category-scoped, deterministic account-level deduplication preserving canonical first-seen assets.
-  - Pipeline & Orchestration: `pipeline.detect_session` with disk caching (`MISC_GRID_VERSION = 3.0.0`), category gating (eligible: `ITEM_SET`, `HELMET`, `BACKPACK`, `MASK`, `GRENADE`, `PARACHUTE`, `EMOTE`, `MISC`; deferred to M4: `GUN`, `VEHICLE`, `OUTFIT`), periodic session checkpointing, and CLI `detect` command.
+  - Pipeline & Orchestration: `pipeline.detect_session` with disk caching (`MISC_GRID_VERSION = 3.0.0`), category gating, periodic session checkpointing, and CLI `detect` command.
   - Test Coverage & Performance: Comprehensive pytest suite across models, quality, dedup, grid reconstruction, and pipeline persistence; microbenchmark achieving ~69 ms end-to-end per 2778x1284 native screen.
-- **Milestone 4 — Specialized Detectors**: Planned (Gun Lab layout & level badge, Vehicle grid & ceiling mask, Outfit VIP/Mythic).
-- **Milestone 4 — Specialized Detectors**: Planned.
+- **Milestone 4 — Specialized PUBG Detectors**: Completed.
+  - `CategoryRouter` (`detectors/router.py`): Unified contract `route(context, classification, settings) -> SpecializedDetectionResult`. Dispatches category-specific detectors with zero category deferral.
+  - `GunDetector` (`gun_workshop_detector`, v1.0.0): Weapon upgrade workshop active card extraction in right region (`x >= 0.55 * W`) using orange HSV boundary contour, 4px inner border trimming, native resolution crop preservation, and metadata ROI generation for M5 OCR (`level_roi`, `name_roi`, `kill_counter_roi`).
+  - `VehicleDetector` (`vehicle_card_detector`, v1.0.0): Wide card extraction (aspect 2.1–3.1) in right vehicle gallery column (`x: 0.64..0.88 * W`), 3px border trimming, and boundary cut / partial card scoring.
+  - `OutfitDetector` (`outfit_character_detector`, v1.0.0): Full-body character extraction supporting normal lobby (Sobel edge density anchor) and supercar lobby (`supercar_ceiling.png` template matching >= 0.75).
+  - `EquipmentDetector` (`equipment_grid_detector`, v1.0.0): Inventory grid detection for `HELMET`, `BACKPACK`, `MASK` with backpack level 1/2/3 selector bar exclusion (`y < 0.21 * H`) and helmet top-nine layout policy.
+  - `AccessoryDetector` (`accessory_grid_detector`, v1.0.0): Accessory grid detection for `GRENADE`, `PARACHUTE`, `EMOTE` with grenade subcategory tab header exclusion (`y < 0.22 * H`).
+  - `InventoryDetector` (`inventory_grid_detector`, v1.0.0): Right-column inventory grid detection for `ITEM_SET`, `MISC` (`x: 0.58..0.89 * W`, `y: 0.14..0.92 * H`).
+  - Shared-Context Zero-Redecode Fallback: Low confidence or zero candidate outputs immediately trigger `GenericGridDetector` on the *exact same instantiated `DetectionContext`* without redundant image decodes from disk.
+  - Full Provenance Tracking: Records `primary_detector`, `fallback_detector`, `fallback_used`, `specialized_confidence`, and `fallback_confidence` in `SourceDetectionResult` and individual `DetectedAsset` entries.
+  - Category Dedup Profiles (`DedupProfile`): Parametric category profiles in `AccountDeduplicator` specifying custom center-crop boxes, pHash thresholds (4 for guns, 8 for vehicles/outfits), and MAE diff thresholds (6.0 for guns, 10.0 for vehicles/outfits).
 - **Milestone 5 — Cascade OCR**: Planned.
 - **Milestone 6 — Review System**: Planned.
 - **Milestone 7 — Layout Engine**: Planned.

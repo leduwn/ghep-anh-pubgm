@@ -2,12 +2,44 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Optional, Union
 import cv2
 import numpy as np
 
 from core.models import DetectedAsset, Rect
 from core.constants import DEFAULT_DUPLICATE_THRESHOLD
+
+
+@dataclass(frozen=True)
+class DedupProfile:
+    """Category-specific deduplication settings and crop boundaries."""
+    name: str
+    crop_box_ratio: tuple[float, float, float, float] = (0.15, 0.15, 0.85, 0.85)
+    phash_threshold: int = 10
+    diff_threshold: float = 12.0
+
+
+DEFAULT_CATEGORY_DEDUP_PROFILES: dict[str, DedupProfile] = {
+    "GUN": DedupProfile(
+        name="GUN",
+        crop_box_ratio=(0.10, 0.10, 0.90, 0.90),
+        phash_threshold=4,
+        diff_threshold=6.0,
+    ),
+    "VEHICLE": DedupProfile(
+        name="VEHICLE",
+        crop_box_ratio=(0.15, 0.10, 0.85, 0.90),
+        phash_threshold=8,
+        diff_threshold=10.0,
+    ),
+    "OUTFIT": DedupProfile(
+        name="OUTFIT",
+        crop_box_ratio=(0.15, 0.20, 0.70, 0.80),
+        phash_threshold=8,
+        diff_threshold=10.0,
+    ),
+}
 
 
 def compute_phash(tile_bgr: np.ndarray) -> int:
@@ -38,14 +70,20 @@ def compute_phash(tile_bgr: np.ndarray) -> int:
     return hash_val
 
 
-def compute_visual_core(tile_bgr: np.ndarray) -> np.ndarray:
-    """Extracts a normalized 48x48 grayscale feature array from central 70%."""
+def compute_visual_core(
+    tile_bgr: np.ndarray,
+    crop_box_ratio: tuple[float, float, float, float] = (0.15, 0.15, 0.85, 0.85),
+) -> np.ndarray:
+    """Extracts a normalized 48x48 grayscale feature array from central crop."""
     if tile_bgr is None or tile_bgr.size == 0:
         return np.zeros((48, 48), dtype=np.float32)
 
     h, w = tile_bgr.shape[:2]
-    y1, y2 = int(round(h * 0.15)), max(int(round(h * 0.15)) + 1, int(round(h * 0.85)))
-    x1, x2 = int(round(w * 0.15)), max(int(round(w * 0.15)) + 1, int(round(w * 0.85)))
+    y1_r, x1_r, y2_r, x2_r = crop_box_ratio
+    y1 = int(round(h * y1_r))
+    y2 = max(y1 + 1, int(round(h * y2_r)))
+    x1 = int(round(w * x1_r))
+    x2 = max(x1 + 1, int(round(w * x2_r)))
     central = tile_bgr[y1:y2, x1:x2]
 
     gray = cv2.cvtColor(central, cv2.COLOR_BGR2GRAY)
@@ -73,6 +111,7 @@ def are_visually_identical(
     hash_b: Optional[int] = None,
     diff_threshold: float = 12.0,
     phash_threshold: int = 10,
+    crop_box_ratio: tuple[float, float, float, float] = (0.15, 0.15, 0.85, 0.85),
 ) -> tuple[bool, float, int]:
     """Two-stage duplicate check: fast pHash shortlist followed by normalized MAE confirmation."""
     ha = hash_a if hash_a is not None else compute_phash(tile_a)
@@ -82,12 +121,12 @@ def are_visually_identical(
     if dist > phash_threshold:
         return False, 999.0, dist
 
-    norm_a = compute_visual_core(tile_a)
-    norm_b = compute_visual_core(tile_b)
+    norm_a = compute_visual_core(tile_a, crop_box_ratio=crop_box_ratio)
+    norm_b = compute_visual_core(tile_b, crop_box_ratio=crop_box_ratio)
 
     # Scaled MAE
     mae = float(np.mean(np.abs(norm_a - norm_b))) * 25.0
-    is_dup = (dist <= 6 and mae < diff_threshold * 1.5) or (mae < diff_threshold)
+    is_dup = (mae < diff_threshold)
     return is_dup, mae, dist
 
 
@@ -100,9 +139,13 @@ class AccountDeduplicator:
         phash_threshold: int = 10,
         duplicate_mae_threshold: Optional[float] = None,
         duplicate_phash_max_distance: Optional[int] = None,
+        category_profiles: Optional[dict[str, DedupProfile]] = None,
     ):
         self.diff_threshold = duplicate_mae_threshold if duplicate_mae_threshold is not None else diff_threshold
         self.phash_threshold = duplicate_phash_max_distance if duplicate_phash_max_distance is not None else phash_threshold
+        self.category_profiles = dict(DEFAULT_CATEGORY_DEDUP_PROFILES)
+        if category_profiles:
+            self.category_profiles.update(category_profiles)
 
     @property
     def mae_threshold(self) -> float:
@@ -111,6 +154,23 @@ class AccountDeduplicator:
     @property
     def phash_max_distance(self) -> int:
         return self.phash_threshold
+
+    def get_profile(self, category: str) -> DedupProfile:
+        cat_upper = category.upper()
+        if cat_upper in self.category_profiles:
+            prof = self.category_profiles[cat_upper]
+            return DedupProfile(
+                name=prof.name,
+                crop_box_ratio=prof.crop_box_ratio,
+                phash_threshold=min(self.phash_threshold, prof.phash_threshold),
+                diff_threshold=min(self.diff_threshold, prof.diff_threshold),
+            )
+        return DedupProfile(
+            name=cat_upper,
+            crop_box_ratio=(0.15, 0.15, 0.85, 0.85),
+            phash_threshold=self.phash_threshold,
+            diff_threshold=self.diff_threshold,
+        )
 
     def deduplicate_session_assets(
         self,
@@ -157,6 +217,7 @@ class AccountDeduplicator:
             # Compute hash once
             h = compute_phash(tile)
             matched_canonical_id: Optional[str] = None
+            prof = self.get_profile(cat)
 
             for can_asset, can_tile, can_h in canonical_by_cat[cat]:
                 is_dup, _, _ = are_visually_identical(
@@ -164,8 +225,9 @@ class AccountDeduplicator:
                     can_tile,
                     hash_a=h,
                     hash_b=can_h,
-                    diff_threshold=self.diff_threshold,
-                    phash_threshold=self.phash_threshold,
+                    diff_threshold=prof.diff_threshold,
+                    phash_threshold=prof.phash_threshold,
+                    crop_box_ratio=prof.crop_box_ratio,
                 )
                 if is_dup:
                     matched_canonical_id = can_asset.id

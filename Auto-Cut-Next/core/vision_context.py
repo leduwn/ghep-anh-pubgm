@@ -53,6 +53,14 @@ class VisionContext:
         self._hsv: Optional[np.ndarray] = None
 
     @property
+    def scan_width(self) -> int:
+        return self.scan_w
+
+    @property
+    def scan_height(self) -> int:
+        return self.scan_h
+
+    @property
     def gray(self) -> np.ndarray:
         if self._gray is None:
             self._gray = cv2.cvtColor(self.scan_bgr, cv2.COLOR_BGR2GRAY)

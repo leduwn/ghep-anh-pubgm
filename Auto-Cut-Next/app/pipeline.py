@@ -33,8 +33,10 @@ from detectors import (
     CardGeometryProfile,
     CardCandidate,
     GridDetectionResult,
+    SpecializedDetectionResult,
     SourceDetectionResult,
     GenericDetector,
+    CategoryRouter,
 )
 
 
@@ -53,6 +55,13 @@ class AutoCutPipeline:
         self.logger = logger or StageLogger(self.workspace.workspace_root / "logs")
         self.metrics = metrics or MetricsCollector()
         self.ingestor = ImageIngestor()
+        self._disk_cache: Optional[DiskCache] = None
+
+    @property
+    def disk_cache(self) -> DiskCache:
+        if self._disk_cache is None:
+            self._disk_cache = DiskCache(self.workspace.workspace_root / "cache" / "detection")
+        return self._disk_cache
 
     def get_or_create_session(self, account_id: str) -> AccountSession:
         """Retrieves existing session or initializes a new one."""
@@ -393,9 +402,17 @@ class AutoCutPipeline:
             detector_confidence_threshold=self.settings.detector_confidence_threshold,
         )
 
-        disk_cache = DiskCache(self.workspace.workspace_root / "cache" / "detection")
+        disk_cache = self.disk_cache
+
+        router = CategoryRouter(
+            quality_evaluator=detector.quality_evaluator,
+            detector_confidence_threshold=self.settings.detector_confidence_threshold,
+        )
 
         eligible_categories = {
+            Category.GUN.value,
+            Category.VEHICLE.value,
+            Category.OUTFIT.value,
             Category.ITEM_SET.value,
             Category.HELMET.value,
             Category.BACKPACK.value,
@@ -405,11 +422,7 @@ class AutoCutPipeline:
             Category.EMOTE.value,
             Category.MISC.value,
         }
-        deferred_categories = {
-            Category.GUN.value,
-            Category.VEHICLE.value,
-            Category.OUTFIT.value,
-        }
+        deferred_categories: set[str] = set()
 
         successful_sources = sorted(
             [s for s in session.sources.values() if s.status == SourceStatus.SUCCESS.value],
@@ -484,33 +497,23 @@ class AutoCutPipeline:
                         status="ERROR",
                     )
                     continue
-                # Disk cache lookup for per-source candidate results
+                # Resolve detector metadata for category and disk cache
+                det_instance, det_name, det_ver = router.get_detector_for_category(class_res.category)
                 cache_key = CacheKeyGenerator.generate(
                     image_sha256=source.sha256,
                     crop_rect=None,
-                    subsystem_version=MISC_GRID_VERSION,
-                    route=f"detect_grid:{detector.profile.fingerprint}:l{self.settings.lock_threshold}:e{self.settings.empty_content_threshold}",
+                    subsystem_version=det_ver,
+                    route=f"route:{det_name}:{class_res.category}:l{self.settings.lock_threshold}:e{self.settings.empty_content_threshold}",
                 )
 
-                grid_res: Optional[GridDetectionResult] = None
+                spec_res: Optional[SpecializedDetectionResult] = None
                 cached_data = disk_cache.get(cache_key) if not force else None
                 if cached_data is not None:
                     try:
-                        cands = [CardCandidate.from_dict(c) for c in cached_data.get("candidates", [])]
-                        grid_res = GridDetectionResult(
-                            detected=bool(cached_data.get("detected", False)),
-                            grid_confidence=float(cached_data.get("grid_confidence", 0.0)),
-                            rows=int(cached_data.get("rows", 0)),
-                            columns=int(cached_data.get("columns", 0)),
-                            candidates=cands,
-                            accepted=[c for c in cands if not (c.locked or c.empty or c.partial)],
-                            rejected=[c for c in cands if (c.locked or c.empty or c.partial)],
-                            diagnostics=dict(cached_data.get("diagnostics", {})),
-                            duration_ms=float(cached_data.get("duration_ms", 0.0)),
-                        )
+                        spec_res = SpecializedDetectionResult.from_dict(cached_data)
                         self.metrics.detect_sources_cached += 1
                     except Exception:
-                        grid_res = None
+                        spec_res = None
 
                 # Image decode & context execution if not retrieved from cache
                 t_detect_0 = time.perf_counter()
@@ -530,8 +533,9 @@ class AutoCutPipeline:
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=DetectionStatus.ERROR.value,
-                        detector="generic_grid_detector",
-                        detector_version=MISC_GRID_VERSION,
+                        detector=det_name,
+                        detector_version=det_ver,
+                        primary_detector=det_name,
                         reasons=[err_msg],
                         error_message=err_msg,
                     )
@@ -547,41 +551,55 @@ class AutoCutPipeline:
                     source=source,
                 )
 
-                if grid_res is None:
-                    grid_res = detector.detect_grid(context, profile=profile)
+                if spec_res is None:
+                    spec_res = router.route(context, classification=class_res, settings=self.settings)
                     self.metrics.detect_sources_processed += 1
                     # Persist candidates to disk cache
                     try:
-                        disk_cache.put(cache_key, {
-                            "detected": grid_res.detected,
-                            "grid_confidence": grid_res.grid_confidence,
-                            "rows": grid_res.rows,
-                            "columns": grid_res.columns,
-                            "candidates": [c.to_dict() for c in grid_res.candidates],
-                            "diagnostics": grid_res.diagnostics,
-                            "duration_ms": grid_res.duration_ms,
-                        })
+                        disk_cache.put(cache_key, spec_res.to_dict())
                     except Exception as exc:
-                        logger.warning(f"Failed to cache grid detection for {source.id}: {exc}")
+                        self.logger.warning(f"Failed to cache detection for {source.id}: {exc}")
                         self.metrics.cache_write_errors += 1
 
-                if grid_res.detected:
-                    assets = detector.create_assets_from_candidates(
-                        grid_res.candidates,
+                # Update specialized & fallback metrics
+                if spec_res.metadata.get("fallback_used"):
+                    self.metrics.fallback_attempted += 1
+                    if spec_res.detected:
+                        self.metrics.fallback_success += 1
+                else:
+                    self.metrics.specialized_attempted += 1
+                    if spec_res.detected:
+                        self.metrics.specialized_success += 1
+
+                cat_val = class_res.category.upper()
+                if cat_val == Category.GUN.value:
+                    self.metrics.gun_detected += 1
+                elif cat_val == Category.VEHICLE.value:
+                    self.metrics.vehicle_detected += 1
+                elif cat_val == Category.OUTFIT.value:
+                    self.metrics.outfit_detected += 1
+                elif cat_val in (Category.HELMET.value, Category.BACKPACK.value, Category.MASK.value):
+                    self.metrics.equipment_detected += 1
+                elif cat_val in (Category.GRENADE.value, Category.PARACHUTE.value, Category.EMOTE.value):
+                    self.metrics.accessory_detected += 1
+                elif cat_val in (Category.ITEM_SET.value, Category.MISC.value):
+                    self.metrics.inventory_detected += 1
+
+                if spec_res.detected:
+                    assets = router.create_assets_from_result(
+                        spec_res,
                         context,
                         category=class_res.category,
-                        detector_version=MISC_GRID_VERSION,
                         source_review_required=(class_res.decision == Decision.REVIEW.value),
-                        grid_confidence=grid_res.grid_confidence,
                     )
 
-                    # Invalidate only previously detected generic assets for this source
-                    session.invalidate_source_products(source.id, detector="generic_grid_detector")
+                    # Invalidate only previously detected assets for this source
+                    session.invalidate_source_products(source.id, detector=spec_res.detector_name)
                     for a in assets:
                         session.add_asset(a)
                         tile_crops[a.id] = context.crop_original(a.crop_rect)
 
-                    self.metrics.candidates_found += len(grid_res.candidates)
+                    self.metrics.candidates_found += len(spec_res.candidates)
                     self.metrics.assets_created += len(assets)
                     self.metrics.locked_found += sum(1 for a in assets if a.locked)
                     self.metrics.empty_found += sum(1 for a in assets if a.empty)
@@ -591,17 +609,22 @@ class AutoCutPipeline:
                     active_cnt = sum(1 for a in assets if not (a.locked or a.empty or a.partial or a.duplicate))
                     rev_cnt = sum(1 for a in assets if a.review_required)
 
-                    is_low_conf = grid_res.grid_confidence < self.settings.detector_confidence_threshold
+                    is_low_conf = spec_res.confidence < self.settings.detector_confidence_threshold
                     det_status = DetectionStatus.REVIEW.value if (rev_cnt > 0 or is_low_conf) else DetectionStatus.SUCCESS.value
-                    det_reasons = [f"Grid detected: {grid_res.rows}x{grid_res.columns} ({len(assets)} cards)"]
+                    det_reasons = list(spec_res.reasons)
                     if is_low_conf:
-                        det_reasons.append(f"Grid geometry confidence {grid_res.grid_confidence:.2f} below threshold {self.settings.detector_confidence_threshold:.2f}")
+                        det_reasons.append(f"Confidence {spec_res.confidence:.2f} below threshold {self.settings.detector_confidence_threshold:.2f}")
 
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=det_status,
-                        detector="generic_grid_detector",
-                        detector_version=MISC_GRID_VERSION,
+                        detector=spec_res.detector_name,
+                        detector_version=spec_res.detector_version,
+                        primary_detector=spec_res.metadata.get("primary_detector", spec_res.detector_name),
+                        fallback_detector=spec_res.metadata.get("fallback_detector"),
+                        fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
+                        specialized_confidence=float(spec_res.metadata.get("specialized_confidence", spec_res.confidence)),
+                        fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
                         card_count=len(assets),
                         active_count=active_cnt,
                         locked_count=sum(1 for a in assets if a.locked),
@@ -613,15 +636,20 @@ class AutoCutPipeline:
                     )
                 else:
                     self.metrics.detect_sources_no_grid += 1
-                    session.invalidate_source_products(source.id, detector="generic_grid_detector")
+                    session.invalidate_source_products(source.id, detector=spec_res.detector_name)
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=DetectionStatus.NO_GRID.value,
-                        detector="generic_grid_detector",
-                        detector_version=MISC_GRID_VERSION,
+                        detector=spec_res.detector_name,
+                        detector_version=spec_res.detector_version,
+                        primary_detector=spec_res.metadata.get("primary_detector", spec_res.detector_name),
+                        fallback_detector=spec_res.metadata.get("fallback_detector"),
+                        fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
+                        specialized_confidence=float(spec_res.metadata.get("specialized_confidence", 0.0)),
+                        fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
                         card_count=0,
                         active_count=0,
-                        reasons=["No coherent card grid detected"],
+                        reasons=spec_res.reasons or ["No cards detected by specialized detector or fallback"],
                         duration_ms=(time.perf_counter() - t_detect_0) * 1000.0,
                     )
 
@@ -632,7 +660,7 @@ class AutoCutPipeline:
                 # Structured log per source
                 det_res = session.detections[source.id]
                 self.logger.info(
-                    f"grid={grid_res.rows}x{grid_res.columns} cards={det_res.card_count} "
+                    f"detector={spec_res.detector_name} cards={det_res.card_count} "
                     f"active={det_res.active_count} locked={det_res.locked_count} "
                     f"empty={det_res.empty_count} partial={det_res.partial_count}",
                     stage=Stage.DETECT,

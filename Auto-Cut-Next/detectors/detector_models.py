@@ -112,3 +112,54 @@ class GridDetectionResult:
     duration_ms: float = 0.0
 
 
+@dataclass
+class SpecializedDetectionResult:
+    """Standardized result returned by all specialized detectors."""
+    detected: bool
+    confidence: float = 0.0
+    candidates: list[CardCandidate] = field(default_factory=list)
+    accepted: list[CardCandidate] = field(default_factory=list)
+    rejected: list[CardCandidate] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    fallback_recommended: bool = False
+    detector_name: str = ""
+    detector_version: str = "1.0.0"
+    duration_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "detected": self.detected,
+            "confidence": round(self.confidence, 4),
+            "candidates": [c.to_dict() for c in self.candidates],
+            "reasons": list(self.reasons),
+            "diagnostics": dict(self.diagnostics),
+            "fallback_recommended": self.fallback_recommended,
+            "detector_name": self.detector_name,
+            "detector_version": self.detector_version,
+            "duration_ms": round(self.duration_ms, 2),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SpecializedDetectionResult":
+        cands = [CardCandidate.from_dict(c) for c in data.get("candidates", [])]
+        acc = [c for c in cands if not (c.locked or c.empty or c.partial)]
+        rej = [c for c in cands if (c.locked or c.empty or c.partial)]
+        return cls(
+            detected=bool(data.get("detected", False)),
+            confidence=float(data.get("confidence", 0.0)),
+            candidates=cands,
+            accepted=acc,
+            rejected=rej,
+            reasons=list(data.get("reasons", [])),
+            diagnostics=dict(data.get("diagnostics", {})),
+            fallback_recommended=bool(data.get("fallback_recommended", False)),
+            detector_name=str(data.get("detector_name", "")),
+            detector_version=str(data.get("detector_version", "1.0.0")),
+            duration_ms=float(data.get("duration_ms", 0.0)),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+

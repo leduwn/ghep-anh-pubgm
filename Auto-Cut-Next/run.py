@@ -22,7 +22,7 @@ from app.pipeline import AutoCutPipeline
 def run_self_test() -> int:
     """Verifies environment, imports, models, settings, atomic session, cache, logger, classifier, and generic detector."""
     print("=" * 60)
-    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 3)")
+    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 4)")
     print("=" * 60)
 
     import tempfile
@@ -180,8 +180,47 @@ def run_self_test() -> int:
         print(f"      FAIL: Generic detector smoke test error: {exc}")
         return 1
 
+    # 9. Specialized detectors & CategoryRouter smoke test
+    print("[9/9] Testing specialized PUBG detectors & CategoryRouter...")
+    try:
+        from core.models import ClassificationResult
+        from detectors import CategoryRouter
+        router = CategoryRouter()
+        assert router.get_detector_for_category(Category.GUN.value)[1] == "gun_workshop_detector"
+        assert router.get_detector_for_category(Category.VEHICLE.value)[1] == "vehicle_card_detector"
+        assert router.get_detector_for_category(Category.OUTFIT.value)[1] == "outfit_character_detector"
+
+        # Synthetic workshop test
+        w, h = 1280, 720
+        syn_img = np.zeros((h, w, 3), dtype=np.uint8)
+        syn_img[:] = (20, 20, 20)
+        card_x, card_y, card_w, card_h = int(0.60 * w), int(0.25 * h), int(0.25 * w), int(0.20 * h)
+        cv2.rectangle(syn_img, (card_x, card_y), (card_x + card_w, card_y + card_h), (30, 140, 240), 8)
+        cv2.rectangle(syn_img, (card_x + 8, card_y + 8), (card_x + card_w - 8, card_y + card_h - 8), (80, 80, 80), -1)
+
+        ctx_spec = DetectionContext(syn_img)
+        res_spec = router.route(ctx_spec, classification=ClassificationResult(Category.GUN.value, 0.95))
+        assert res_spec.detected
+        assert res_spec.detector_name == "gun_workshop_detector"
+        assert res_spec.metadata.get("fallback_used") is False
+        ctx_spec.close()
+
+        # Shared-context fallback test
+        blank_img = np.zeros((h, w, 3), dtype=np.uint8)
+        ctx_blank = DetectionContext(blank_img)
+        res_fb = router.route(ctx_blank, classification=ClassificationResult(Category.GUN.value, 0.90))
+        assert res_fb.metadata.get("fallback_used") is True
+        assert res_fb.metadata.get("primary_detector") == "gun_workshop_detector"
+        assert res_fb.metadata.get("fallback_detector") == "generic_grid_detector"
+        ctx_blank.close()
+
+        print("      PASS: Specialized detectors & CategoryRouter zero-redecode fallback verified.")
+    except Exception as exc:
+        print(f"      FAIL: Specialized detectors smoke test error: {exc}")
+        return 1
+
     print("=" * 60)
-    print("      ALL 8 SELF-TESTS PASSED SUCCESSFULLY!")
+    print("      ALL 9 SELF-TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
     return 0
 

@@ -270,13 +270,13 @@ class GenericGridDetector:
         if len(h_steps) >= 2:
             med_step = float(np.median(h_steps))
             std_step = float(np.std(h_steps))
-            h_spacing_score = max(0.0, 1.0 - 2.0 * (std_step / max(1.0, med_step)))
+            h_spacing_score = max(0.0, 1.0 - 3.0 * (std_step / max(1.0, med_step)))
 
         v_spacing_score = 1.0
         if len(v_steps) >= 2:
             med_step = float(np.median(v_steps))
             std_step = float(np.std(v_steps))
-            v_spacing_score = max(0.0, 1.0 - 2.0 * (std_step / max(1.0, med_step)))
+            v_spacing_score = max(0.0, 1.0 - 3.0 * (std_step / max(1.0, med_step)))
 
         if len(h_steps) >= 2 and len(v_steps) >= 2:
             spacing_consistency = round((h_spacing_score + v_spacing_score) / 2.0, 4)
@@ -294,10 +294,10 @@ class GenericGridDetector:
         fill_ratio = round(min(1.0, len(ordered_grid) / float(expected_cells)), 4)
 
         grid_conf = round(
-            0.30 * size_consistency +
-            0.25 * horizontal_alignment +
-            0.25 * vertical_alignment +
-            0.10 * spacing_consistency +
+            0.25 * size_consistency +
+            0.20 * horizontal_alignment +
+            0.20 * vertical_alignment +
+            0.25 * spacing_consistency +
             0.10 * fill_ratio,
             4
         )
@@ -407,8 +407,8 @@ class GenericGridDetector:
         duration_ms = (time.perf_counter() - t0) * 1000.0
         grid_conf, geom_diag = self.compute_grid_confidence(
             ordered_grid,
-            scan_w=context.scan_width,
-            scan_h=context.scan_height,
+            scan_w=context.scan_w,
+            scan_h=context.scan_h,
             profile=active_profile,
         )
 

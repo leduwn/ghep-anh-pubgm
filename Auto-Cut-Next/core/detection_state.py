@@ -15,6 +15,11 @@ class SourceDetectionResult:
     status: str = DetectionStatus.PENDING.value
     detector: str = "generic_grid_detector"
     detector_version: str = MISC_GRID_VERSION
+    primary_detector: Optional[str] = None
+    fallback_detector: Optional[str] = None
+    fallback_used: bool = False
+    specialized_confidence: float = 0.0
+    fallback_confidence: float = 0.0
     card_count: int = 0
     active_count: int = 0
     locked_count: int = 0
@@ -32,6 +37,11 @@ class SourceDetectionResult:
             "status": self.status,
             "detector": self.detector,
             "detector_version": self.detector_version,
+            "primary_detector": self.primary_detector,
+            "fallback_detector": self.fallback_detector,
+            "fallback_used": self.fallback_used,
+            "specialized_confidence": round(self.specialized_confidence, 4),
+            "fallback_confidence": round(self.fallback_confidence, 4),
             "card_count": self.card_count,
             "active_count": self.active_count,
             "locked_count": self.locked_count,
@@ -51,6 +61,11 @@ class SourceDetectionResult:
             status=str(data.get("status", DetectionStatus.PENDING.value)),
             detector=str(data.get("detector", "generic_grid_detector")),
             detector_version=str(data.get("detector_version", MISC_GRID_VERSION)),
+            primary_detector=data.get("primary_detector"),
+            fallback_detector=data.get("fallback_detector"),
+            fallback_used=bool(data.get("fallback_used", False)),
+            specialized_confidence=float(data.get("specialized_confidence", 0.0)),
+            fallback_confidence=float(data.get("fallback_confidence", 0.0)),
             card_count=int(data.get("card_count", 0)),
             active_count=int(data.get("active_count", 0)),
             locked_count=int(data.get("locked_count", 0)),
