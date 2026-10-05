@@ -38,6 +38,7 @@ class MetricsCollector:
     specialized_review: int = 0
     fallback_attempted: int = 0
     fallback_success: int = 0
+    fallback_selected: int = 0
     gun_detected: int = 0
     vehicle_detected: int = 0
     outfit_detected: int = 0

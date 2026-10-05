@@ -17,6 +17,7 @@ class SourceDetectionResult:
     detector_version: str = MISC_GRID_VERSION
     primary_detector: Optional[str] = None
     fallback_detector: Optional[str] = None
+    fallback_attempted: bool = False
     fallback_used: bool = False
     specialized_confidence: float = 0.0
     fallback_confidence: float = 0.0
@@ -39,6 +40,7 @@ class SourceDetectionResult:
             "detector_version": self.detector_version,
             "primary_detector": self.primary_detector,
             "fallback_detector": self.fallback_detector,
+            "fallback_attempted": self.fallback_attempted,
             "fallback_used": self.fallback_used,
             "specialized_confidence": round(self.specialized_confidence, 4),
             "fallback_confidence": round(self.fallback_confidence, 4),
@@ -63,6 +65,7 @@ class SourceDetectionResult:
             detector_version=str(data.get("detector_version", MISC_GRID_VERSION)),
             primary_detector=data.get("primary_detector"),
             fallback_detector=data.get("fallback_detector"),
+            fallback_attempted=bool(data.get("fallback_attempted", False)),
             fallback_used=bool(data.get("fallback_used", False)),
             specialized_confidence=float(data.get("specialized_confidence", 0.0)),
             fallback_confidence=float(data.get("fallback_confidence", 0.0)),

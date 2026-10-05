@@ -143,8 +143,18 @@ python -m pytest Auto-Cut-Next/tests -v
   - `AccessoryDetector` (`accessory_grid_detector`, v1.0.0): Accessory grid detection for `GRENADE`, `PARACHUTE`, `EMOTE` with grenade subcategory tab header exclusion (`y < 0.22 * H`).
   - `InventoryDetector` (`inventory_grid_detector`, v1.0.0): Right-column inventory grid detection for `ITEM_SET`, `MISC` (`x: 0.58..0.89 * W`, `y: 0.14..0.92 * H`).
   - Shared-Context Zero-Redecode Fallback: Low confidence or zero candidate outputs immediately trigger `GenericGridDetector` on the *exact same instantiated `DetectionContext`* without redundant image decodes from disk.
-  - Full Provenance Tracking: Records `primary_detector`, `fallback_detector`, `fallback_used`, `specialized_confidence`, and `fallback_confidence` in `SourceDetectionResult` and individual `DetectedAsset` entries.
+  - Full Provenance Tracking: Records `primary_detector`, `fallback_detector`, `fallback_attempted`, `fallback_used`, `specialized_confidence`, and `fallback_confidence` in `SourceDetectionResult` and individual `DetectedAsset` entries.
   - Category Dedup Profiles (`DedupProfile`): Parametric category profiles in `AccountDeduplicator` specifying custom center-crop boxes, pHash thresholds (4 for guns, 8 for vehicles/outfits), and MAE diff thresholds (6.0 for guns, 10.0 for vehicles/outfits).
+- **Milestone 4.1 — Router, Cache & Asset Invalidation Hardening**: Completed.
+  - `ROUTER_VERSION = "1.1.0"`: Bumped router version with composite disk cache keys incorporating `ROUTER_VERSION`, `primary_detector@version`, `MISC_GRID_VERSION`, `detector_confidence_threshold`, `lock_threshold`, and `empty_content_threshold`.
+  - Tri-State Fallback Selection Policy (`CategoryRouter.route`):
+    - **Case A**: Specialized detected and `confidence >= threshold` -> use specialized directly without invoking generic fallback (`fallback_attempted=False, fallback_used=False`).
+    - **Case B**: Specialized failed or produced 0 candidates -> run generic fallback (`fallback_attempted=True`). If generic succeeds, use generic (`fallback_used=True`); if generic also fails, report failed detection.
+    - **Case C**: Specialized detected but `confidence < threshold` -> run generic fallback (`fallback_attempted=True`). If generic is clearly better (`generic_conf > specialized_conf`), select generic (`fallback_used=True`). If specialized is still better, retain specialized but mark REVIEW (`fallback_used=False, review_required=True`).
+  - Semantic Fallback Review Policy: Generic grid fallback on semantic single-entity categories (`GUN`, `VEHICLE`, `OUTFIT`) strictly enforces `review_required=True` on all extracted assets.
+  - Route-Generation Asset Invalidation: `AccountSession.invalidate_detection_assets_for_source(source_id)` wipes out prior M4 detector family assets for that source before adding new ones upon route changes or re-runs, while strictly preserving manual overrides (`manual_override=True`) and manual audit history (`session.manual_changes`).
+  - Gating: `Decision.UNKNOWN`, `Decision.ERROR`, and `Category.OTHER` sources are strictly gated from running detection or creating assets, invalidating any preexisting stale assets.
+  - Metrics Semantics: Independent counters for `specialized_attempted`, `specialized_success`, `fallback_attempted`, `fallback_success`, and `fallback_selected`.
 - **Milestone 5 — Cascade OCR**: Planned.
 - **Milestone 6 — Review System**: Planned.
 - **Milestone 7 — Layout Engine**: Planned.

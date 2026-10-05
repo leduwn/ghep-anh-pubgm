@@ -405,3 +405,286 @@ def test_dedup_evaluates_with_category_profile():
     # For VEHICLE (threshold 10.0), MAE=8.0 IS identical
     is_veh_dup, _ = dedup.are_visually_identical(tile1, tile2, category="VEHICLE")
     assert is_veh_dup is True
+
+
+# ==============================================================================
+# Milestone 4.1 Regression Tests (Tri-State Fallback, Provenance, Invalidation)
+# ==============================================================================
+
+def test_category_router_case_a_direct_specialized():
+    """Case A: Strong specialized detection bypasses generic fallback entirely."""
+    w, h = 1920, 1080
+    img = create_blank_bgr(w, h, color=(15, 15, 15))
+
+    card_x, card_y, card_w, card_h = 1200, 300, 480, 240
+    cv2.rectangle(img, (card_x, card_y), (card_x + card_w, card_y + card_h), (30, 140, 240), 8)
+    cv2.rectangle(img, (card_x + 8, card_y + 8), (card_x + card_w - 8, card_y + card_h - 8), (80, 80, 80), -1)
+
+    ctx = make_context(img)
+    router = CategoryRouter()
+    class_res = ClassificationResult(category=Category.GUN.value, confidence=0.95)
+
+    res = router.route(ctx, classification=class_res)
+
+    assert res.detected is True
+    assert res.metadata["primary_detector"] == "gun_workshop_detector"
+    assert res.metadata["fallback_detector"] is None
+    assert res.metadata["fallback_attempted"] is False
+    assert res.metadata["fallback_used"] is False
+    assert res.metadata["specialized_attempted"] is True
+    assert res.metadata["specialized_success"] is True
+    assert res.metadata["fallback_success"] is False
+    assert res.detector_name == "gun_workshop_detector"
+
+
+def test_category_router_case_b_specialized_failed_generic_succeeds():
+    """Case B: When specialized fails, generic fallback is executed and selected."""
+    w, h = 1920, 1080
+    img = create_blank_bgr(w, h, color=(20, 20, 20))
+
+    start_x = int(0.20 * w)
+    start_y = int(0.20 * h)
+    for r in range(2):
+        for c in range(2):
+            tx = start_x + c * 150
+            ty = start_y + r * 150
+            cv2.rectangle(img, (tx, ty), (tx + 120, ty + 120), (180, 180, 180), 2)
+            cv2.rectangle(img, (tx + 4, ty + 4), (tx + 116, ty + 116), (70, 70, 70), -1)
+
+    ctx = make_context(img)
+    router = CategoryRouter()
+    class_res = ClassificationResult(category=Category.GUN.value, confidence=0.85)
+
+    res = router.route(ctx, classification=class_res)
+
+    assert res.detected is True
+    assert res.metadata["primary_detector"] == "gun_workshop_detector"
+    assert res.metadata["fallback_detector"] == "generic_grid_detector"
+    assert res.metadata["fallback_attempted"] is True
+    assert res.metadata["fallback_used"] is True
+    assert res.metadata["specialized_attempted"] is True
+    assert res.metadata["specialized_success"] is False
+    assert res.metadata["fallback_success"] is True
+    assert res.detector_name == "generic_grid_detector"
+
+
+def test_category_router_case_b_both_fail():
+    """Case B: When both specialized and generic fallback fail on blank image."""
+    img = create_blank_bgr(1280, 720, color=(10, 10, 10))
+    ctx = make_context(img)
+    router = CategoryRouter()
+    class_res = ClassificationResult(category=Category.GUN.value, confidence=0.85)
+
+    res = router.route(ctx, classification=class_res)
+
+    assert res.detected is False
+    assert res.metadata["fallback_attempted"] is True
+    assert res.metadata["fallback_used"] is False
+    assert res.metadata["specialized_attempted"] is True
+    assert res.metadata["specialized_success"] is False
+    assert res.metadata["fallback_success"] is False
+
+
+def test_category_router_case_c_comparison(monkeypatch):
+    """Case C: When specialized is weak, compare with generic fallback."""
+    from detectors.detector_models import CardCandidate, SpecializedDetectionResult, GridDetectionResult
+
+    w, h = 1920, 1080
+    img = create_blank_bgr(w, h, color=(20, 20, 20))
+    ctx = make_context(img)
+    router = CategoryRouter(detector_confidence_threshold=0.60)
+    class_res = ClassificationResult(category=Category.GUN.value, confidence=0.85)
+
+    # Sub-case 1: Generic is clearly better (fallback_conf > specialized_conf)
+    dummy_cand = CardCandidate(
+        rect_scan=Rect(10, 10, 50, 50),
+        rect_original=Rect(10, 10, 50, 50),
+        content_rect_original=Rect(10, 10, 50, 50),
+        confidence=0.40,
+    )
+    weak_spec = SpecializedDetectionResult(
+        detected=True,
+        confidence=0.40,
+        candidates=[dummy_cand],
+        accepted=[dummy_cand],
+        detector_name="gun_workshop_detector",
+        detector_version="1.0.0",
+    )
+    monkeypatch.setattr(router.gun_detector, "detect", lambda *args, **kwargs: weak_spec)
+
+    # Mock generic detector to return strong result (conf = 0.85)
+    strong_cand = CardCandidate(
+        rect_scan=Rect(20, 20, 60, 60),
+        rect_original=Rect(20, 20, 60, 60),
+        content_rect_original=Rect(20, 20, 60, 60),
+        confidence=0.85,
+    )
+    strong_generic = GridDetectionResult(
+        detected=True,
+        grid_confidence=0.85,
+        candidates=[strong_cand],
+        accepted=[strong_cand],
+    )
+    monkeypatch.setattr(router.generic_grid_detector, "detect", lambda *args, **kwargs: strong_generic)
+
+    res1 = router.route(ctx, classification=class_res)
+    assert res1.metadata["fallback_attempted"] is True
+    assert res1.metadata["fallback_used"] is True
+    assert res1.metadata["fallback_success"] is True
+    assert res1.detector_name == "generic_grid_detector"
+
+    # Sub-case 2: Specialized is better than generic fallback (specialized_conf >= fallback_conf)
+    weak_generic = GridDetectionResult(
+        detected=True,
+        grid_confidence=0.30,
+        candidates=[strong_cand],
+        accepted=[strong_cand],
+    )
+    monkeypatch.setattr(router.generic_grid_detector, "detect", lambda *args, **kwargs: weak_generic)
+
+    res2 = router.route(ctx, classification=class_res)
+    assert res2.metadata["fallback_attempted"] is True
+    assert res2.metadata["fallback_used"] is False
+    assert res2.metadata["specialized_success"] is True
+    assert res2.detector_name == "gun_workshop_detector"
+    assert res2.metadata["review_required"] is True
+    assert all(c.review_required for c in res2.candidates)
+
+
+def test_semantic_fallback_review_policy():
+    """Generic grid fallback for GUN, VEHICLE, and OUTFIT enforces review_required=True."""
+    w, h = 1920, 1080
+    img = create_blank_bgr(w, h, color=(20, 20, 20))
+
+    start_x = int(0.20 * w)
+    start_y = int(0.20 * h)
+    for r in range(2):
+        for c in range(2):
+            tx = start_x + c * 150
+            ty = start_y + r * 150
+            cv2.rectangle(img, (tx, ty), (tx + 120, ty + 120), (180, 180, 180), 2)
+            cv2.rectangle(img, (tx + 4, ty + 4), (tx + 116, ty + 116), (70, 70, 70), -1)
+
+    ctx = make_context(img)
+    router = CategoryRouter()
+
+    for semantic_cat in [Category.GUN.value, Category.VEHICLE.value, Category.OUTFIT.value]:
+        class_res = ClassificationResult(category=semantic_cat, confidence=0.85)
+        res = router.route(ctx, classification=class_res)
+        assert res.metadata["fallback_used"] is True
+
+        assets = router.create_assets_from_result(res, ctx, category=semantic_cat)
+        assert len(assets) > 0
+        for a in assets:
+            assert a.review_required is True
+            assert any("Semantic fallback" in reason for reason in a.review_reasons)
+
+
+def test_session_invalidate_detection_assets_preserves_manual():
+    """AccountSession.invalidate_detection_assets_for_source purges M4 assets but keeps manual_override."""
+    from core.models import AccountSession, DetectedAsset
+
+    session = AccountSession(account_id="acc_test")
+
+    # Add M4 detected assets for source "src_1"
+    a1 = DetectedAsset(
+        id="asset_gun_1",
+        source_id="src_1",
+        category="GUN",
+        crop_rect=Rect(10, 10, 50, 50),
+        native_width=50,
+        native_height=50,
+        detector="gun_workshop_detector",
+        detector_version="1.0.0",
+        manual_override=False,
+    )
+    a2 = DetectedAsset(
+        id="asset_gen_1",
+        source_id="src_1",
+        category="GUN",
+        crop_rect=Rect(70, 70, 50, 50),
+        native_width=50,
+        native_height=50,
+        detector="generic_grid_detector",
+        detector_version="2.1.0",
+        manual_override=False,
+    )
+    # Add manual asset for "src_1"
+    a_manual = DetectedAsset(
+        id="asset_manual_1",
+        source_id="src_1",
+        category="GUN",
+        crop_rect=Rect(130, 130, 50, 50),
+        native_width=50,
+        native_height=50,
+        detector="manual",
+        detector_version="1.0.0",
+        manual_override=True,
+    )
+    # Add asset for another source "src_2"
+    a_other = DetectedAsset(
+        id="asset_src2_1",
+        source_id="src_2",
+        category="GUN",
+        crop_rect=Rect(10, 10, 50, 50),
+        native_width=50,
+        native_height=50,
+        detector="gun_workshop_detector",
+        detector_version="1.0.0",
+        manual_override=False,
+    )
+
+    session.add_asset(a1)
+    session.add_asset(a2)
+    session.add_asset(a_manual)
+    session.add_asset(a_other)
+    session.record_manual_change("test_manual_edit", {"asset_id": "asset_manual_1"})
+
+    assert len(session.assets) == 4
+    assert len(session.manual_changes) == 1
+
+    # Invalidate detection assets for "src_1"
+    removed = session.invalidate_detection_assets_for_source("src_1")
+    assert removed == 2
+    assert len(session.assets) == 2
+
+    remaining_ids = {a.id for a in session.assets}
+    assert "asset_manual_1" in remaining_ids
+    assert "asset_src2_1" in remaining_ids
+    assert "asset_gun_1" not in remaining_ids
+    assert "asset_gen_1" not in remaining_ids
+    assert len(session.manual_changes) == 1
+
+
+def test_composite_cache_key_invalidation():
+    """Cache key changes whenever ROUTER_VERSION, primary detector version, MISC_GRID_VERSION, or thresholds change."""
+    from core.cache import CacheKeyGenerator
+
+    sha = "testsha256" * 4
+
+    def gen(router_v, prim_v, misc_v, conf_t, lock_t, empty_t):
+        token = (
+            f"router:{router_v}:"
+            f"primary:gun_workshop@{prim_v}:"
+            f"fallback:generic_grid@{misc_v}:"
+            f"cat:GUN:"
+            f"conf{conf_t:.2f}:"
+            f"l{lock_t:.2f}:"
+            f"e{empty_t:.2f}"
+        )
+        return CacheKeyGenerator.generate(
+            image_sha256=sha,
+            crop_rect=None,
+            subsystem_version=router_v,
+            route=token,
+        )
+
+    base_k = gen("1.1.0", "1.0.0", "2.1.0", 0.60, 0.50, 0.35)
+
+    assert base_k != gen("1.2.0", "1.0.0", "2.1.0", 0.60, 0.50, 0.35)  # router bump
+    assert base_k != gen("1.1.0", "1.1.0", "2.1.0", 0.60, 0.50, 0.35)  # primary bump
+    assert base_k != gen("1.1.0", "1.0.0", "2.2.0", 0.60, 0.50, 0.35)  # misc grid bump
+    assert base_k != gen("1.1.0", "1.0.0", "2.1.0", 0.70, 0.50, 0.35)  # conf threshold change
+    assert base_k != gen("1.1.0", "1.0.0", "2.1.0", 0.60, 0.55, 0.35)  # lock threshold change
+    assert base_k != gen("1.1.0", "1.0.0", "2.1.0", 0.60, 0.50, 0.40)  # empty threshold change
+

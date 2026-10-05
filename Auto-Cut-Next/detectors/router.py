@@ -99,6 +99,12 @@ class CategoryRouter:
         specialized_confidence = 0.0
         fallback_confidence = 0.0
 
+        conf_thresh = (
+            settings.detector_confidence_threshold
+            if (settings and hasattr(settings, "detector_confidence_threshold"))
+            else self.detector_confidence_threshold
+        )
+
         if det_name == GenericGridDetector.NAME:
             # Direct generic grid detection
             generic_res = self.generic_grid_detector.detect(context)
@@ -118,7 +124,11 @@ class CategoryRouter:
                 metadata={
                     "primary_detector": GenericGridDetector.NAME,
                     "fallback_detector": None,
+                    "fallback_attempted": False,
                     "fallback_used": False,
+                    "specialized_attempted": False,
+                    "specialized_success": False,
+                    "fallback_success": False,
                     "specialized_confidence": generic_res.grid_confidence,
                     "fallback_confidence": 0.0,
                 },
@@ -131,61 +141,169 @@ class CategoryRouter:
             settings=settings,
         )
         specialized_confidence = spec_res.confidence
+        spec_has_cands = len(spec_res.candidates) > 0
+        spec_detected = spec_res.detected and spec_has_cands
 
-        # Determine if fallback is required
-        needs_fallback = (
-            spec_res.fallback_recommended
-            or not spec_res.detected
-            or len(spec_res.candidates) == 0
-        )
-
-        if not needs_fallback:
-            # Succeeded without fallback
+        # Case A: Specialized detected and confidence >= threshold -> use specialized directly.
+        # Do NOT invoke generic detector (fallback_attempted=False, fallback_used=False).
+        if spec_detected and specialized_confidence >= conf_thresh and not spec_res.fallback_recommended:
             spec_res.metadata["primary_detector"] = primary_detector
             spec_res.metadata["fallback_detector"] = None
+            spec_res.metadata["fallback_attempted"] = False
             spec_res.metadata["fallback_used"] = False
+            spec_res.metadata["specialized_attempted"] = True
+            spec_res.metadata["specialized_success"] = True
+            spec_res.metadata["fallback_success"] = False
             spec_res.metadata["specialized_confidence"] = round(specialized_confidence, 4)
             spec_res.metadata["fallback_confidence"] = 0.0
             return spec_res
 
-        # Fallback triggered: execute GenericGridDetector on the exact same context (zero-redecode)
-        fallback_detector = GenericGridDetector.NAME
-        fallback_used = True
-
+        # Fallback executed for Cases B & C
+        fallback_attempted = True
         generic_res = self.generic_grid_detector.detect(context)
         fallback_confidence = generic_res.grid_confidence
+        generic_usable = generic_res.detected and len(generic_res.candidates) > 0
         duration_ms = (time.perf_counter() - t0) * 1000.0
-
-        fallback_reasons = list(spec_res.reasons)
-        fallback_reasons.append(
-            f"Fallback to GenericGridDetector triggered (specialized conf: {specialized_confidence:.2f}, generic conf: {fallback_confidence:.2f})"
-        )
 
         combined_diagnostics = {
             "specialized_diagnostics": spec_res.diagnostics,
             "fallback_diagnostics": generic_res.diagnostics,
         }
 
-        return SpecializedDetectionResult(
-            detected=generic_res.detected,
-            confidence=generic_res.grid_confidence,
-            candidates=generic_res.candidates,
-            accepted=generic_res.accepted,
-            rejected=generic_res.rejected,
-            reasons=fallback_reasons,
-            diagnostics=combined_diagnostics,
-            fallback_recommended=False,
-            detector_name=GenericGridDetector.NAME,
-            detector_version=MISC_GRID_VERSION,
-            duration_ms=round(duration_ms, 2),
-            metadata={
-                "primary_detector": primary_detector,
-                "fallback_detector": fallback_detector,
-                "fallback_used": fallback_used,
-                "specialized_confidence": round(specialized_confidence, 4),
-                "fallback_confidence": round(fallback_confidence, 4),
-            },
-        )
+        # Case B: Specialized failed or 0 candidates -> run generic fallback.
+        # If generic succeeds -> use generic.
+        if not spec_detected or spec_res.fallback_recommended:
+            if generic_usable:
+                fallback_reasons = list(spec_res.reasons)
+                fallback_reasons.append(
+                    f"Fallback to GenericGridDetector triggered (specialized failed, generic conf: {fallback_confidence:.2f})"
+                )
+                if cat in {"GUN", "VEHICLE", "OUTFIT"}:
+                    fallback_reasons.append(f"Semantic fallback to generic grid for {cat} requires review")
+                    for c in generic_res.candidates:
+                        c.review_required = True
+                        c.rejection_reasons.append(f"Semantic fallback to generic grid for {cat} requires review")
+
+                return SpecializedDetectionResult(
+                    detected=True,
+                    confidence=generic_res.grid_confidence,
+                    candidates=generic_res.candidates,
+                    accepted=generic_res.accepted,
+                    rejected=generic_res.rejected,
+                    reasons=fallback_reasons,
+                    diagnostics=combined_diagnostics,
+                    fallback_recommended=False,
+                    detector_name=GenericGridDetector.NAME,
+                    detector_version=MISC_GRID_VERSION,
+                    duration_ms=round(duration_ms, 2),
+                    metadata={
+                        "primary_detector": primary_detector,
+                        "fallback_detector": GenericGridDetector.NAME,
+                        "fallback_attempted": True,
+                        "fallback_used": True,
+                        "specialized_attempted": True,
+                        "specialized_success": False,
+                        "fallback_success": True,
+                        "specialized_confidence": round(specialized_confidence, 4),
+                        "fallback_confidence": round(fallback_confidence, 4),
+                    },
+                )
+            else:
+                # Both failed
+                fail_reasons = list(spec_res.reasons)
+                fail_reasons.append(
+                    f"Generic fallback also failed (generic conf: {fallback_confidence:.2f})"
+                )
+                return SpecializedDetectionResult(
+                    detected=False,
+                    confidence=0.0,
+                    candidates=[],
+                    accepted=[],
+                    rejected=[],
+                    reasons=fail_reasons,
+                    diagnostics=combined_diagnostics,
+                    fallback_recommended=False,
+                    detector_name=GenericGridDetector.NAME,
+                    detector_version=MISC_GRID_VERSION,
+                    duration_ms=round(duration_ms, 2),
+                    metadata={
+                        "primary_detector": primary_detector,
+                        "fallback_detector": GenericGridDetector.NAME,
+                        "fallback_attempted": True,
+                        "fallback_used": False,
+                        "specialized_attempted": True,
+                        "specialized_success": False,
+                        "fallback_success": False,
+                        "specialized_confidence": round(specialized_confidence, 4),
+                        "fallback_confidence": round(fallback_confidence, 4),
+                    },
+                )
+
+        # Case C: Specialized detected but confidence < threshold -> compare both results.
+        # If generic is clearly better: choose generic.
+        # If specialized is still better: retain specialized but mark REVIEW.
+        # If both are weak: preserve best plausible result and require REVIEW.
+        if generic_usable and (fallback_confidence > specialized_confidence):
+            # Generic clearly better
+            fallback_reasons = list(spec_res.reasons)
+            fallback_reasons.append(
+                f"Generic fallback selected over weak specialized (specialized conf: {specialized_confidence:.2f} < generic conf: {fallback_confidence:.2f})"
+            )
+            if cat in {"GUN", "VEHICLE", "OUTFIT"}:
+                fallback_reasons.append(f"Semantic fallback to generic grid for {cat} requires review")
+                for c in generic_res.candidates:
+                    c.review_required = True
+                    c.rejection_reasons.append(f"Semantic fallback to generic grid for {cat} requires review")
+
+            return SpecializedDetectionResult(
+                detected=True,
+                confidence=generic_res.grid_confidence,
+                candidates=generic_res.candidates,
+                accepted=generic_res.accepted,
+                rejected=generic_res.rejected,
+                reasons=fallback_reasons,
+                diagnostics=combined_diagnostics,
+                fallback_recommended=False,
+                detector_name=GenericGridDetector.NAME,
+                detector_version=MISC_GRID_VERSION,
+                duration_ms=round(duration_ms, 2),
+                metadata={
+                    "primary_detector": primary_detector,
+                    "fallback_detector": GenericGridDetector.NAME,
+                    "fallback_attempted": True,
+                    "fallback_used": True,
+                    "specialized_attempted": True,
+                    "specialized_success": True,
+                    "fallback_success": True,
+                    "specialized_confidence": round(specialized_confidence, 4),
+                    "fallback_confidence": round(fallback_confidence, 4),
+                },
+            )
+        else:
+            # Retain specialized result (it is better or equal to fallback) but mark REVIEW
+            spec_reasons = list(spec_res.reasons)
+            spec_reasons.append(
+                f"Retained specialized result (conf: {specialized_confidence:.2f}) over fallback (conf: {fallback_confidence:.2f}); review required"
+            )
+            for c in spec_res.candidates:
+                c.review_required = True
+                c.rejection_reasons.append(
+                    f"Low confidence specialized detection ({specialized_confidence:.2f} < {conf_thresh:.2f})"
+                )
+
+            spec_res.reasons = spec_reasons
+            spec_res.diagnostics = {**spec_res.diagnostics, **combined_diagnostics}
+            spec_res.metadata["primary_detector"] = primary_detector
+            spec_res.metadata["fallback_detector"] = GenericGridDetector.NAME
+            spec_res.metadata["fallback_attempted"] = True
+            spec_res.metadata["fallback_used"] = False
+            spec_res.metadata["specialized_attempted"] = True
+            spec_res.metadata["specialized_success"] = True
+            spec_res.metadata["fallback_success"] = generic_usable
+            spec_res.metadata["specialized_confidence"] = round(specialized_confidence, 4)
+            spec_res.metadata["fallback_confidence"] = round(fallback_confidence, 4)
+            spec_res.metadata["review_required"] = True
+            return spec_res
 
     def create_assets_from_result(
         self,
@@ -201,6 +319,7 @@ class CategoryRouter:
 
         primary_detector = result.metadata.get("primary_detector", detector_name)
         fallback_detector = result.metadata.get("fallback_detector")
+        fallback_attempted = bool(result.metadata.get("fallback_attempted", False))
         fallback_used = bool(result.metadata.get("fallback_used", False))
         specialized_conf = float(result.metadata.get("specialized_confidence", result.confidence))
         fallback_conf = float(result.metadata.get("fallback_confidence", 0.0))
@@ -226,6 +345,13 @@ class CategoryRouter:
                     f"Detector confidence {result.confidence:.2f} below threshold {self.detector_confidence_threshold:.2f}"
                 )
 
+            # Semantic fallback review policy: generic grid fallback for GUN, VEHICLE, OUTFIT requires review
+            if fallback_used and category.upper() in {"GUN", "VEHICLE", "OUTFIT"}:
+                review_req = True
+                sem_reason = f"Semantic fallback to generic grid for {category.upper()} requires review"
+                if not any("Semantic fallback" in r for r in review_reasons):
+                    review_reasons.append(sem_reason)
+
             asset_meta = {
                 "partial_score": cand.partial_score,
                 "lock_score": cand.lock_score,
@@ -233,6 +359,7 @@ class CategoryRouter:
                 "geometry_score": cand.geometry_score,
                 "primary_detector": primary_detector,
                 "fallback_detector": fallback_detector,
+                "fallback_attempted": fallback_attempted,
                 "fallback_used": fallback_used,
                 "specialized_confidence": specialized_conf,
                 "fallback_confidence": fallback_conf,

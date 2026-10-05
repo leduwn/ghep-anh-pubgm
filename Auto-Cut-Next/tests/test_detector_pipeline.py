@@ -85,6 +85,7 @@ def test_pipeline_detect_category_gating_and_deferred(temp_workspace, tmp_path):
     assert gun_src_id in session.detections
     gun_det = session.detections[gun_src_id]
     assert gun_det.primary_detector == "gun_workshop_detector"
+    assert gun_det.fallback_attempted is True
     assert gun_det.fallback_used is True
     assert gun_det.card_count == 4
 
@@ -257,6 +258,116 @@ def test_pipeline_detect_stale_classifier_version(temp_workspace, tmp_path):
     assert det.status == DetectionStatus.ERROR.value
     assert "stale" in det.error_message.lower()
     assert len(session.assets) == 0
+
+
+def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
+    """Re-running detection with route switch purges previous route's assets completely."""
+    account_id = "test_switch_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    img = make_grid_image(rows=1, cols=2, seed=88)
+    f = tmp_path / "switch_screen.png"
+    cv2.imwrite(str(f), img)
+
+    session = pipeline.ingest_sources(account_id, [f])
+    src_id = next(iter(session.sources.keys()))
+
+    # Run 1: Classified as ITEM_SET (inventory_grid_detector)
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.ITEM_SET.value,
+        confidence=0.95,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+    pipeline.detect_session(account_id, force=True)
+
+    assert len(session.assets) == 2
+    assert all(a.detector == "inventory_grid_detector" for a in session.assets)
+
+    # Run 2: Reclassified as HELMET (equipment_grid_detector) with force=True
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.HELMET.value,
+        confidence=0.95,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+    pipeline.detect_session(account_id, force=True)
+
+    # Must NOT accumulate: still exactly 2 assets, all from equipment_grid_detector
+    assert len(session.assets) == 2
+    assert all(a.detector == "equipment_grid_detector" for a in session.assets)
+    assert not any(a.detector == "inventory_grid_detector" for a in session.assets)
+
+
+def test_pipeline_gating_unknown_error_other(temp_workspace, tmp_path):
+    """Decision.UNKNOWN, Decision.ERROR, and Category.OTHER are gated and clear stale assets."""
+    account_id = "test_gate_all_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    img = make_grid_image(rows=1, cols=2, seed=91)
+    f = tmp_path / "gate_screen.png"
+    cv2.imwrite(str(f), img)
+
+    session = pipeline.ingest_sources(account_id, [f])
+    src_id = next(iter(session.sources.keys()))
+
+    # First detect with valid category to establish assets
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.BACKPACK.value,
+        confidence=0.90,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+    pipeline.detect_session(account_id, force=True)
+    assert len(session.assets) == 2
+
+    # Now reclassify to Category.OTHER
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.OTHER.value,
+        confidence=0.99,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+    pipeline.detect_session(account_id, force=True)
+
+    # Assets must be invalidated and 0 remaining
+    assert len(session.assets) == 0
+
+
+def test_pipeline_metrics_counters(temp_workspace, tmp_path):
+    """Metrics accurately increment specialized_attempted, fallback_attempted, fallback_selected."""
+    account_id = "test_metrics_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    # Source 1: generic grid screen classified as GUN -> triggers fallback
+    img1 = make_grid_image(rows=1, cols=2, seed=12)
+    f1 = tmp_path / "m_gun.png"
+    cv2.imwrite(str(f1), img1)
+
+    session = pipeline.ingest_sources(account_id, [f1])
+    s1_id = next(iter(session.sources.keys()))
+
+    session.classifications[s1_id] = ClassificationResult(
+        category=Category.GUN.value,
+        confidence=0.90,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+
+    pipeline.detect_session(account_id, force=True)
+
+    # GUN specialized was attempted (1), failed (0 success), fallback attempted (1), fallback succeeded (1), fallback selected (1)
+    assert pipeline.metrics.specialized_attempted == 1
+    assert pipeline.metrics.specialized_success == 0
+    assert pipeline.metrics.fallback_attempted == 1
+    assert pipeline.metrics.fallback_success == 1
+    assert pipeline.metrics.fallback_selected == 1
+
 
 
 def test_pipeline_detect_cache_write_error_handled(temp_workspace, tmp_path, monkeypatch):

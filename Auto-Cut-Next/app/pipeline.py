@@ -17,6 +17,7 @@ from core.constants import (
     Category,
     DetectionStatus,
     CLASSIFIER_VERSION,
+    ROUTER_VERSION,
     MISC_GRID_VERSION,
 )
 from core.cache import DiskCache, CacheKeyGenerator
@@ -440,15 +441,21 @@ class AutoCutPipeline:
                 self.metrics.detect_sources_seen += 1
                 source_path = Path(source.path)
 
-                # Check classification existence
+                # Check classification existence and gating
                 class_res = session.classifications.get(source.id)
-                if class_res is None or class_res.decision in {Decision.UNKNOWN.value, Decision.ERROR.value}:
+                if (
+                    class_res is None
+                    or class_res.decision in {Decision.UNKNOWN.value, Decision.ERROR.value}
+                    or class_res.category == Category.OTHER.value
+                    or class_res.category not in eligible_categories
+                ):
+                    session.invalidate_detection_assets_for_source(source.id)
                     continue
 
                 # Category gating: specialized categories are deferred to M4
                 if class_res.category in deferred_categories:
                     self.metrics.detect_sources_deferred += 1
-                    session.invalidate_source_products(source.id, detector="generic_grid_detector")
+                    session.invalidate_detection_assets_for_source(source.id)
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=DetectionStatus.DEFERRED.value,
@@ -457,9 +464,6 @@ class AutoCutPipeline:
                         reasons=["Specialized detector required (deferred to M4)"],
                     )
                     session.touch()
-                    continue
-
-                if class_res.category not in eligible_categories:
                     continue
 
                 # Check stale classification version
@@ -497,13 +501,22 @@ class AutoCutPipeline:
                         status="ERROR",
                     )
                     continue
-                # Resolve detector metadata for category and disk cache
+                # Resolve detector metadata for category and composite disk cache key
                 det_instance, det_name, det_ver = router.get_detector_for_category(class_res.category)
+                route_token = (
+                    f"router:{ROUTER_VERSION}:"
+                    f"primary:{det_name}@{det_ver}:"
+                    f"fallback:generic_grid@{MISC_GRID_VERSION}:"
+                    f"cat:{class_res.category}:"
+                    f"conf{self.settings.detector_confidence_threshold:.2f}:"
+                    f"l{self.settings.lock_threshold:.2f}:"
+                    f"e{self.settings.empty_content_threshold:.2f}"
+                )
                 cache_key = CacheKeyGenerator.generate(
                     image_sha256=source.sha256,
                     crop_rect=None,
-                    subsystem_version=det_ver,
-                    route=f"route:{det_name}:{class_res.category}:l{self.settings.lock_threshold}:e{self.settings.empty_content_threshold}",
+                    subsystem_version=ROUTER_VERSION,
+                    route=route_token,
                 )
 
                 spec_res: Optional[SpecializedDetectionResult] = None
@@ -562,14 +575,18 @@ class AutoCutPipeline:
                         self.metrics.cache_write_errors += 1
 
                 # Update specialized & fallback metrics
-                if spec_res.metadata.get("fallback_used"):
-                    self.metrics.fallback_attempted += 1
-                    if spec_res.detected:
-                        self.metrics.fallback_success += 1
-                else:
+                if spec_res.metadata.get("specialized_attempted", False):
                     self.metrics.specialized_attempted += 1
-                    if spec_res.detected:
+                    if spec_res.metadata.get("specialized_success", False):
                         self.metrics.specialized_success += 1
+
+                if spec_res.metadata.get("fallback_attempted", False):
+                    self.metrics.fallback_attempted += 1
+                    if spec_res.metadata.get("fallback_success", False):
+                        self.metrics.fallback_success += 1
+
+                if spec_res.metadata.get("fallback_used", False):
+                    self.metrics.fallback_selected += 1
 
                 cat_val = class_res.category.upper()
                 if cat_val == Category.GUN.value:
@@ -594,7 +611,7 @@ class AutoCutPipeline:
                     )
 
                     # Invalidate only previously detected assets for this source
-                    session.invalidate_source_products(source.id, detector=spec_res.detector_name)
+                    session.invalidate_detection_assets_for_source(source.id)
                     for a in assets:
                         session.add_asset(a)
                         tile_crops[a.id] = context.crop_original(a.crop_rect)
@@ -622,6 +639,7 @@ class AutoCutPipeline:
                         detector_version=spec_res.detector_version,
                         primary_detector=spec_res.metadata.get("primary_detector", spec_res.detector_name),
                         fallback_detector=spec_res.metadata.get("fallback_detector"),
+                        fallback_attempted=bool(spec_res.metadata.get("fallback_attempted", False)),
                         fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
                         specialized_confidence=float(spec_res.metadata.get("specialized_confidence", spec_res.confidence)),
                         fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
@@ -636,7 +654,7 @@ class AutoCutPipeline:
                     )
                 else:
                     self.metrics.detect_sources_no_grid += 1
-                    session.invalidate_source_products(source.id, detector=spec_res.detector_name)
+                    session.invalidate_detection_assets_for_source(source.id)
                     session.detections[source.id] = SourceDetectionResult(
                         source_id=source.id,
                         status=DetectionStatus.NO_GRID.value,
@@ -644,6 +662,7 @@ class AutoCutPipeline:
                         detector_version=spec_res.detector_version,
                         primary_detector=spec_res.metadata.get("primary_detector", spec_res.detector_name),
                         fallback_detector=spec_res.metadata.get("fallback_detector"),
+                        fallback_attempted=bool(spec_res.metadata.get("fallback_attempted", False)),
                         fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
                         specialized_confidence=float(spec_res.metadata.get("specialized_confidence", 0.0)),
                         fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
