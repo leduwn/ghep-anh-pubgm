@@ -23,6 +23,9 @@ from .constants import (
     DEFAULT_EMPTY_CONTENT_THRESHOLD,
     DEFAULT_DUPLICATE_PHASH_MAX_DISTANCE,
     DEFAULT_DUPLICATE_MAE_THRESHOLD,
+    DEFAULT_OCR_ACCEPT_THRESHOLD,
+    DEFAULT_OCR_REVIEW_THRESHOLD,
+    DEFAULT_OCR_CACHE_SIZE,
     DEFAULT_MAX_CANVAS_WIDTH,
     DEFAULT_MAX_CANVAS_HEIGHT,
     MIN_COLUMNS,
@@ -43,6 +46,10 @@ class AutoCutSettings:
     # OCR Settings
     ocr_device: str = "auto"  # "auto", "gpu", "cpu"
     ocr_workers: int = 1
+    ocr_accept_threshold: float = DEFAULT_OCR_ACCEPT_THRESHOLD
+    ocr_review_threshold: float = DEFAULT_OCR_REVIEW_THRESHOLD
+    ocr_cache_size: int = DEFAULT_OCR_CACHE_SIZE
+    ocr_download_enabled: bool = True
 
     # Classifier & Detector Thresholds
     classifier_accept_threshold: float = DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD
@@ -96,6 +103,12 @@ class AutoCutSettings:
             raise ConfigurationError(f"Invalid ocr_device: '{self.ocr_device}'.")
         if not (1 <= self.ocr_workers <= 8):
             raise ConfigurationError(f"ocr_workers must be 1..8, got {self.ocr_workers}.")
+        if not (0.0 <= self.ocr_review_threshold <= self.ocr_accept_threshold <= 1.0):
+            raise ConfigurationError(
+                f"Must satisfy 0.0 <= ocr_review_threshold ({self.ocr_review_threshold}) <= ocr_accept_threshold ({self.ocr_accept_threshold}) <= 1.0."
+            )
+        if not (16 <= self.ocr_cache_size <= 10000):
+            raise ConfigurationError(f"ocr_cache_size must be in [16, 10000], got {self.ocr_cache_size}.")
         for name, val in [
             ("classifier_accept_threshold", self.classifier_accept_threshold),
             ("classifier_review_threshold", self.classifier_review_threshold),
@@ -132,6 +145,10 @@ class AutoCutSettings:
             "photoshop_path": self.photoshop_path,
             "ocr_device": self.ocr_device,
             "ocr_workers": self.ocr_workers,
+            "ocr_accept_threshold": self.ocr_accept_threshold,
+            "ocr_review_threshold": self.ocr_review_threshold,
+            "ocr_cache_size": self.ocr_cache_size,
+            "ocr_download_enabled": self.ocr_download_enabled,
             "classifier_accept_threshold": self.classifier_accept_threshold,
             "classifier_review_threshold": self.classifier_review_threshold,
             "classifier_ambiguity_margin": self.classifier_ambiguity_margin,
@@ -184,6 +201,10 @@ class AutoCutSettings:
             photoshop_path=data.get("photoshop_path"),
             ocr_device=str(data.get("ocr_device", "auto")),
             ocr_workers=int(data.get("ocr_workers", 1)),
+            ocr_accept_threshold=float(data.get("ocr_accept_threshold", DEFAULT_OCR_ACCEPT_THRESHOLD)),
+            ocr_review_threshold=float(data.get("ocr_review_threshold", DEFAULT_OCR_REVIEW_THRESHOLD)),
+            ocr_cache_size=int(data.get("ocr_cache_size", DEFAULT_OCR_CACHE_SIZE)),
+            ocr_download_enabled=bool(data.get("ocr_download_enabled", True)),
             classifier_accept_threshold=float(data.get("classifier_accept_threshold", DEFAULT_CLASSIFIER_ACCEPT_THRESHOLD)),
             classifier_review_threshold=float(data.get("classifier_review_threshold", DEFAULT_CLASSIFIER_REVIEW_THRESHOLD)),
             classifier_ambiguity_margin=float(data.get("classifier_ambiguity_margin", DEFAULT_CLASSIFIER_AMBIGUITY_MARGIN)),

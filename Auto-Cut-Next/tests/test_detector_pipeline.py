@@ -334,8 +334,48 @@ def test_pipeline_gating_unknown_error_other(temp_workspace, tmp_path):
     temp_workspace.save_session(session)
     pipeline.detect_session(account_id, force=True)
 
-    # Assets must be invalidated and 0 remaining
+    # Assets and detection state must be invalidated and 0 remaining
     assert len(session.assets) == 0
+    assert src_id not in session.detections
+
+
+def test_pipeline_cached_run_does_not_increment_execution_metrics(temp_workspace, tmp_path):
+    """Execution counters only increment on actual runs, not on cache hits."""
+    account_id = "test_metrics_cache_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    img = make_grid_image(rows=1, cols=2, seed=15)
+    f = tmp_path / "m_cache_gun.png"
+    cv2.imwrite(str(f), img)
+
+    session = pipeline.ingest_sources(account_id, [f])
+    src_id = next(iter(session.sources.keys()))
+
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.GUN.value,
+        confidence=0.90,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+
+    # First run: actual execution
+    pipeline.detect_session(account_id, force=False)
+    assert pipeline.metrics.detect_sources_processed == 1
+    assert pipeline.metrics.detect_sources_cached == 0
+    assert pipeline.metrics.specialized_attempted == 1
+    assert pipeline.metrics.fallback_attempted == 1
+
+    # Second run on new pipeline instance without force (cache hit)
+    pipeline_2 = AutoCutPipeline(workspace=temp_workspace)
+    pipeline_2.detect_session(account_id, force=False)
+    assert pipeline_2.metrics.detect_sources_processed == 0
+    assert pipeline_2.metrics.detect_sources_cached == 1
+    assert pipeline_2.metrics.specialized_attempted == 0
+    assert pipeline_2.metrics.specialized_success == 0
+    assert pipeline_2.metrics.fallback_attempted == 0
+    assert pipeline_2.metrics.fallback_success == 0
+    assert pipeline_2.metrics.fallback_selected == 0
 
 
 def test_pipeline_metrics_counters(temp_workspace, tmp_path):

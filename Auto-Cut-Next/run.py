@@ -219,8 +219,48 @@ def run_self_test() -> int:
         print(f"      FAIL: Specialized detectors smoke test error: {exc}")
         return 1
 
+    # 10. OCR Engine & Scheduler smoke test
+    print("[10/10] Testing OCR parsers, fake engine, and multi-source consensus...")
+    try:
+        from ocr.models import OCRObservation
+        from ocr.parsers import parse_gun_level, parse_gun_name, parse_uid
+        from ocr.engine import FakeOCREngine
+        from ocr.uid_ocr import resolve_uid_consensus
+
+        # Test level parser with 3/3 -> 4
+        level_obs = [OCRObservation(text="Tiến độ: 3/3", confidence=0.96)]
+        lv, src, conf, _, _ = parse_gun_level(level_obs)
+        assert lv == 4
+        assert src == "progress"
+
+        # Test canonical weapon parser
+        name_obs = [OCRObservation(text="M416 Băng Giá", confidence=0.98)]
+        w_name, name_conf, _, _ = parse_gun_name(name_obs)
+        assert w_name == "M416"
+
+        # Test UID parser & multi-source consensus
+        uid_obs = [OCRObservation(text="UID: 5123456789", confidence=0.95)]
+        cands = parse_uid(uid_obs, source_id="src_1")
+        assert len(cands) == 1
+        assert cands[0].uid == "5123456789"
+
+        consensus = resolve_uid_consensus(cands)
+        assert consensus.uid == "5123456789"
+        assert consensus.confidence >= 0.95
+        assert not consensus.has_conflict
+
+        # Verify FakeOCREngine
+        fake_engine = FakeOCREngine(default_observations=[OCRObservation(text="M416", confidence=1.0)])
+        res = fake_engine.read_text(np.zeros((10, 10, 3), dtype=np.uint8))
+        assert len(res) == 1
+        assert res[0].text == "M416"
+        print("      PASS: OCR parsers, FakeOCREngine, and UID consensus verified.")
+    except Exception as exc:
+        print(f"      FAIL: OCR smoke test error: {exc}")
+        return 1
+
     print("=" * 60)
-    print("      ALL 9 SELF-TESTS PASSED SUCCESSFULLY!")
+    print("      ALL 10 SELF-TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
     return 0
 
@@ -253,6 +293,15 @@ def main() -> int:
     detect_p.add_argument("--force", action="store_true", help="Force redetection of sources")
     detect_p.add_argument("--verbose", action="store_true", help="Verbose logging")
     detect_p.add_argument("--json", action="store_true", dest="json_output", help="Output summary as JSON")
+
+    # Command: ocr
+    ocr_p = subparsers.add_parser("ocr", help="Run OCR for weapon metadata and account UID")
+    ocr_p.add_argument("account", help="Account identifier")
+    ocr_p.add_argument("--force", action="store_true", help="Force re-OCR bypassing caches")
+    ocr_p.add_argument("--gun-only", action="store_true", help="Only run weapon metadata OCR")
+    ocr_p.add_argument("--uid-only", action="store_true", help="Only run UID recognition")
+    ocr_p.add_argument("--verbose", action="store_true", help="Verbose logging")
+    ocr_p.add_argument("--json", action="store_true", dest="json_output", help="Output summary as JSON")
 
     # Command: info
     info_p = subparsers.add_parser("info", help="Display account session summary")
@@ -400,6 +449,61 @@ def main() -> int:
         print(f"Errors:           {error_count}")
         return 0
 
+    if args.command == "ocr":
+        import json
+        import time
+
+        ws = WorkspaceManager()
+        if not ws.session_exists(args.account):
+            print(f"Error: No session found for account '{args.account}'. Run ingest, classify, and detect first.", file=sys.stderr)
+            return 1
+
+        pipeline = AutoCutPipeline()
+        t0 = time.perf_counter()
+        session = pipeline.ocr_session(
+            args.account,
+            force=args.force,
+            gun_only=args.gun_only,
+            uid_only=args.uid_only,
+        )
+        elapsed = time.perf_counter() - t0
+
+        gun_count = sum(1 for a in session.assets if a.category == "GUN")
+        guns_with_level = sum(1 for a in session.assets if a.category == "GUN" and a.gun_metadata and a.gun_metadata.level is not None)
+        guns_with_name = sum(1 for a in session.assets if a.category == "GUN" and a.gun_metadata and a.gun_metadata.weapon_name is not None)
+        guns_with_counter = sum(1 for a in session.assets if a.category == "GUN" and a.gun_metadata and a.gun_metadata.kill_counter is not None)
+        gun_review = sum(1 for a in session.assets if a.category == "GUN" and a.review_required)
+
+        if args.json_output:
+            data = {
+                "account": args.account,
+                "gun_assets": gun_count,
+                "guns_level_found": guns_with_level,
+                "guns_name_found": guns_with_name,
+                "guns_counter_found": guns_with_counter,
+                "gun_review_required": gun_review,
+                "uid": session.uid,
+                "uid_confidence": session.uid_confidence,
+                "uid_review_required": session.uid_review_required,
+                "cache_hits": pipeline.metrics.ocr_cache_hits,
+                "time_seconds": round(elapsed, 2),
+            }
+            print(json.dumps(data, indent=2))
+            return 0
+
+        print(f"Account: {args.account}\n")
+        print(f"Guns processed:   {gun_count}")
+        print(f"Levels parsed:    {guns_with_level}")
+        print(f"Names parsed:     {guns_with_name}")
+        print(f"Counters parsed:  {guns_with_counter}")
+        print(f"Review required:  {gun_review}\n")
+        print(f"UID:              {session.uid or 'N/A'}")
+        print(f"UID Confidence:   {session.uid_confidence:.2f}")
+        print(f"UID Review:       {session.uid_review_required}")
+        print(f"OCR Cache Hits:   {pipeline.metrics.ocr_cache_hits}")
+        print(f"Time:             {elapsed:.2f} s")
+        return 0
+
     if args.command == "info":
         from core.constants import Decision
         ws = WorkspaceManager()
@@ -421,6 +525,10 @@ def main() -> int:
         duplicate_assets = sum(1 for a in session.assets if a.duplicate)
         review_assets = sum(1 for a in session.assets if a.review_required)
 
+        gun_count = sum(1 for a in session.assets if a.category == "GUN")
+        guns_with_level = sum(1 for a in session.assets if a.category == "GUN" and a.gun_metadata and a.gun_metadata.level is not None)
+        guns_with_counter = sum(1 for a in session.assets if a.category == "GUN" and a.gun_metadata and a.gun_metadata.kill_counter is not None)
+
         print(f"Account:    {session.account_id}")
         print(f"Version:    {session.version}")
         print(f"Sources:    {len(session.sources)}")
@@ -435,9 +543,12 @@ def main() -> int:
         print(f"Duplicate:    {duplicate_assets}")
         print(f"Review:       {review_assets}")
         print()
-        print(f"UID:        {session.uid or 'N/A'}")
-        print(f"Created:    {session.created_at}")
-        print(f"Updated:    {session.updated_at}")
+        print(f"Gun Assets:   {gun_count}")
+        print(f"Guns Level:   {guns_with_level}")
+        print(f"Guns Counter: {guns_with_counter}")
+        print(f"UID:          {session.uid or 'N/A'} (conf={session.uid_confidence:.2f}, rev={session.uid_review_required})")
+        print(f"Created:      {session.created_at}")
+        print(f"Updated:      {session.updated_at}")
         return 0
 
     parser.print_help()

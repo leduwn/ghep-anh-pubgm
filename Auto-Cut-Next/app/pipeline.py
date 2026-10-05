@@ -450,6 +450,8 @@ class AutoCutPipeline:
                     or class_res.category not in eligible_categories
                 ):
                     session.invalidate_detection_assets_for_source(source.id)
+                    session.detections.pop(source.id, None)
+                    session.touch()
                     continue
 
                 # Category gating: specialized categories are deferred to M4
@@ -564,6 +566,7 @@ class AutoCutPipeline:
                     source=source,
                 )
 
+                from_cache = spec_res is not None
                 if spec_res is None:
                     spec_res = router.route(context, classification=class_res, settings=self.settings)
                     self.metrics.detect_sources_processed += 1
@@ -574,19 +577,20 @@ class AutoCutPipeline:
                         self.logger.warning(f"Failed to cache detection for {source.id}: {exc}")
                         self.metrics.cache_write_errors += 1
 
-                # Update specialized & fallback metrics
-                if spec_res.metadata.get("specialized_attempted", False):
-                    self.metrics.specialized_attempted += 1
-                    if spec_res.metadata.get("specialized_success", False):
-                        self.metrics.specialized_success += 1
+                # Update specialized & fallback metrics (only for actual executions, not cache hits)
+                if not from_cache:
+                    if spec_res.metadata.get("specialized_attempted", False):
+                        self.metrics.specialized_attempted += 1
+                        if spec_res.metadata.get("specialized_success", False):
+                            self.metrics.specialized_success += 1
 
-                if spec_res.metadata.get("fallback_attempted", False):
-                    self.metrics.fallback_attempted += 1
-                    if spec_res.metadata.get("fallback_success", False):
-                        self.metrics.fallback_success += 1
+                    if spec_res.metadata.get("fallback_attempted", False):
+                        self.metrics.fallback_attempted += 1
+                        if spec_res.metadata.get("fallback_success", False):
+                            self.metrics.fallback_success += 1
 
-                if spec_res.metadata.get("fallback_used", False):
-                    self.metrics.fallback_selected += 1
+                    if spec_res.metadata.get("fallback_used", False):
+                        self.metrics.fallback_selected += 1
 
                 cat_val = class_res.category.upper()
                 if cat_val == Category.GUN.value:
@@ -731,6 +735,77 @@ class AutoCutPipeline:
                 det.active_count = sum(1 for a in session.assets if a.source_id == src_id and not (a.locked or a.empty or a.partial or a.duplicate))
 
         self.workspace.save_session(session)
+        return session
+
+    def ocr_session(
+        self,
+        account_id: str,
+        force: bool = False,
+        gun_only: bool = False,
+        uid_only: bool = False,
+        engine: Optional[Any] = None,
+    ) -> AccountSession:
+        """Executes OCR recognition for gun metadata and account UID.
+
+        Guarantees lazy-loading of heavy OCR dependencies and single image decode per pass.
+        """
+        session = self.workspace.load_session(account_id)
+        if not session.sources:
+            self.logger.warning("No sources to process in session", stage=Stage.OCR, account=account_id)
+            return session
+
+        # Lazy imports of OCR subsystem
+        from ocr.cache import OCRCache
+        from ocr.engine import EasyOCREngine
+        from ocr.scheduler import OCRScheduler
+
+        created_engine = False
+        if engine is None:
+            created_engine = True
+            models_dir = self.workspace.root_dir / "models" / "easyocr"
+            engine = EasyOCREngine(
+                model_storage_dir=models_dir,
+                device=self.settings.ocr_device,
+                download_enabled=self.settings.ocr_download_enabled,
+                on_gpu_fallback=lambda r: setattr(self.metrics, "ocr_gpu_fallbacks", self.metrics.ocr_gpu_fallbacks + 1),
+            )
+
+        ocr_cache = OCRCache(
+            cache_dir=self.workspace.root_dir / "cache" / "ocr",
+            memory_capacity=self.settings.ocr_cache_size,
+        )
+
+        if force:
+            session.invalidate_ocr()
+
+        scheduler = OCRScheduler(
+            engine=engine,
+            cache=ocr_cache,
+            settings=self.settings,
+            metrics=self.metrics,
+        )
+
+        with self.metrics.timer("ocr"):
+            session = scheduler.run_session_ocr(
+                session=session,
+                force=force,
+                gun_only=gun_only,
+                uid_only=uid_only,
+            )
+
+        self.workspace.save_session(session)
+
+        if created_engine:
+            engine.close()
+
+        self.logger.info(
+            f"OCR complete: guns={self.metrics.ocr_guns_processed} "
+            f"success={self.metrics.ocr_guns_success} "
+            f"uid={session.uid or 'N/A'} conf={session.uid_confidence:.2f}",
+            stage=Stage.OCR,
+            account=account_id,
+            status="SUCCESS",
+        )
         return session
 
 

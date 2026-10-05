@@ -60,6 +60,21 @@ class MetricsCollector:
     cache_corruptions: int = 0
     source_decodes: int = 0
 
+    # OCR Metrics
+    ocr_sources_seen: int = 0
+    ocr_sources_processed: int = 0
+    ocr_sources_cached: int = 0
+    ocr_guns_processed: int = 0
+    ocr_guns_success: int = 0
+    ocr_guns_review: int = 0
+    ocr_counters_found: int = 0
+    ocr_counters_verified: int = 0
+    ocr_uids_found: int = 0
+    ocr_uids_conflicts: int = 0
+    ocr_gpu_fallbacks: int = 0
+    ocr_cache_hits: int = 0
+    ocr_cache_misses: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0
@@ -134,6 +149,11 @@ class MetricsCollector:
             f"Locked Skipped:     {self.locked_skipped}",
             f"Partial Skipped:    {self.partial_skipped}",
             f"Review Required:    {self.review_required}",
+            f"OCR Guns Processed: {self.ocr_guns_processed}",
+            f"OCR Guns Success:   {self.ocr_guns_success}",
+            f"OCR Counters Found: {self.ocr_counters_found}",
+            f"OCR UIDs Found:     {self.ocr_uids_found}",
+            f"OCR Cache Hits:     {self.ocr_cache_hits}",
             "-" * 50,
         ]
         for stage, dur in self.durations.items():

@@ -98,6 +98,11 @@ python Auto-Cut-Next/run.py classify <ACCOUNT_ID> [--force] [--json]
 python Auto-Cut-Next/run.py detect <ACCOUNT_ID> [--force] [--json] [--verbose]
 ```
 
+### Running OCR for Gun Metadata & UID:
+```bash
+python Auto-Cut-Next/run.py ocr <ACCOUNT_ID> [--force] [--gun-only] [--uid-only] [--json] [--verbose]
+```
+
 ### Viewing Account Session Info:
 ```bash
 python Auto-Cut-Next/run.py info <ACCOUNT_ID>
@@ -108,6 +113,7 @@ python Auto-Cut-Next/run.py info <ACCOUNT_ID>
 python Auto-Cut-Next/scripts/benchmark_classifier.py
 python Auto-Cut-Next/scripts/benchmark_detector.py
 python Auto-Cut-Next/scripts/benchmark_specialized_detectors.py
+python Auto-Cut-Next/scripts/benchmark_ocr.py
 ```
 
 ### Running Test Suite:
@@ -155,7 +161,21 @@ python -m pytest Auto-Cut-Next/tests -v
   - Route-Generation Asset Invalidation: `AccountSession.invalidate_detection_assets_for_source(source_id)` wipes out prior M4 detector family assets for that source before adding new ones upon route changes or re-runs, while strictly preserving manual overrides (`manual_override=True`) and manual audit history (`session.manual_changes`).
   - Gating: `Decision.UNKNOWN`, `Decision.ERROR`, and `Category.OTHER` sources are strictly gated from running detection or creating assets, invalidating any preexisting stale assets.
   - Metrics Semantics: Independent counters for `specialized_attempted`, `specialized_success`, `fallback_attempted`, `fallback_success`, and `fallback_selected`.
-- **Milestone 5 — Cascade OCR**: Planned.
+- **Milestone 5 — OCR Engine, Gun Metadata & UID Recognition**: Completed.
+  - `OCR_VERSION = "2.0.0"`: Subsystem versioning for OCR observation cache invalidation and engine updates.
+  - Lazy Loading Architecture: Heavy AI dependencies (`easyocr`, `torch`) are imported strictly inside OCR execution paths; non-OCR commands (`ingest`, `classify`, `detect`, `info`) remain instant with minimal memory footprint.
+  - Device Policy & Proactive CUDA Probe: `probe_cuda_tensor()` validates real GPU tensor allocation before engine init. Single-retry runtime exception handler catches CUDA OOM/crashes during inference and seamlessly switches the reader to CPU without failing account batches. Offline `FakeOCREngine` enables deterministic testing without GPU or network access.
+  - Raw Observation Two-Level Cache: `OCRCache` integrates in-memory LRU (`memory_capacity=512`) with atomic JSON `DiskCache`. Caches raw bounding boxes and text observations (`OCRObservation`), allowing heuristic updates and threshold adjustments without re-running expensive OCR inferences. Includes negative caching for empty text and force bypass.
+  - Visual Badge Presence Gating: `check_counter_badge_presence()` checks high-frequency edge density (`cv2.Canny >= 300`) and colorful saturation (`pixels >= 500`) to verify elimination tracker badges and reject unowned or gray badges before running numeric OCR.
+  - PUBG Domain Parsers:
+    - Level Parser: Progress level `x/y` with PUBG upgrade workshop quirk (`3/3` -> level 4), title fallback (`Cấp 4`, `LV. 7`, Roman numerals `I`..`XX`), and confidence calibration.
+    - Weapon Name Parser: 38 canonical weapon definitions, safe OCR character confusion aliases (e.g., `AU6` -> `AUG`, `AKIVI` -> `AKM`), and zero hallucination on unrecognized weapons.
+    - Kill Counter Parser: 1-8 digit numeric extraction strictly gated by visual badge presence.
+    - UID Parser: Single-box labeled patterns and split-box spatial adjacency matching with character confusion normalization (`O` -> `0`, `l` -> `1`).
+  - Multi-Source UID Consensus: Gathers UID candidates across account screenshots, boosts confidence on multi-source agreement, detects mismatches, and flags conflicts for manual review.
+  - Single-Decode Source Grouping: `OCRScheduler` aggregates all gun level, gun name, kill counter, and UID targets by `source_id`, decodes each screenshot exactly once using `read_image_cv2`, and frees image memory immediately.
+  - Manual Override Preservation: `GunMetadata` properties (`effective_level`, `effective_name`, `effective_counter`, `has_counter`) strictly prioritize user overrides (`level_manual`, `name_manual`, `counter_manual`), preserved across re-runs and invalidations.
+  - CLI & Metrics: `ocr` subcommand, `info` command with weapon/UID statistics, and step 10 in `--self-test`. Comprehensive unit/integration pytest suite and microbenchmark script.
 - **Milestone 6 — Review System**: Planned.
 - **Milestone 7 — Layout Engine**: Planned.
 - **Milestone 8 — Preview & Editor**: Planned.

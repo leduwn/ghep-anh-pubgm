@@ -193,9 +193,23 @@ class GunMetadata:
     ocr_confidence: float = 0.0
     level_manual: Optional[int] = None
     name_manual: Optional[str] = None
+    counter_manual: Optional[str] = None
+    raw_level_text: Optional[str] = None
+    raw_name_text: Optional[str] = None
+    raw_counter_text: Optional[str] = None
+    counter_present: bool = False
+    counter_confidence: float = 0.0
+    level_confidence: float = 0.0
+    name_confidence: float = 0.0
+    level_source: str = "none"
+    needs_review: bool = False
+    review_reasons: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.ocr_confidence = validate_confidence(self.ocr_confidence, "ocr_confidence")
+        self.counter_confidence = validate_confidence(self.counter_confidence, "counter_confidence")
+        self.level_confidence = validate_confidence(self.level_confidence, "level_confidence")
+        self.name_confidence = validate_confidence(self.name_confidence, "name_confidence")
 
     @property
     def effective_level(self) -> Optional[int]:
@@ -204,6 +218,14 @@ class GunMetadata:
     @property
     def effective_name(self) -> Optional[str]:
         return self.name_manual if self.name_manual is not None else self.weapon_name
+
+    @property
+    def effective_counter(self) -> Optional[str]:
+        return self.counter_manual if self.counter_manual is not None else self.kill_counter
+
+    @property
+    def has_counter(self) -> bool:
+        return self.counter_present and bool(self.effective_counter)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -219,6 +241,17 @@ class GunMetadata:
             ocr_confidence=float(data.get("ocr_confidence", 0.0)),
             level_manual=data.get("level_manual"),
             name_manual=data.get("name_manual"),
+            counter_manual=data.get("counter_manual"),
+            raw_level_text=data.get("raw_level_text"),
+            raw_name_text=data.get("raw_name_text"),
+            raw_counter_text=data.get("raw_counter_text"),
+            counter_present=bool(data.get("counter_present", False)),
+            counter_confidence=float(data.get("counter_confidence", 0.0)),
+            level_confidence=float(data.get("level_confidence", 0.0)),
+            name_confidence=float(data.get("name_confidence", 0.0)),
+            level_source=str(data.get("level_source", "none")),
+            needs_review=bool(data.get("needs_review", False)),
+            review_reasons=list(data.get("review_reasons", [])),
         )
 
 
@@ -281,6 +314,7 @@ class DetectedAsset:
     empty: bool = False
     duplicate: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    gun_metadata: Optional[GunMetadata] = None
     manual_override: bool = False
     review_required: bool = False
     review_reasons: list[str] = field(default_factory=list)
@@ -298,6 +332,8 @@ class DetectedAsset:
         result["crop_rect"] = self.crop_rect.to_dict()
         if self.raw_crop_rect is not None:
             result["raw_crop_rect"] = self.raw_crop_rect.to_dict()
+        if self.gun_metadata is not None:
+            result["gun_metadata"] = self.gun_metadata.to_dict()
         return result
 
     @classmethod
@@ -308,6 +344,12 @@ class DetectedAsset:
         raw_rect = Rect.from_dict(raw_crop_data) if isinstance(raw_crop_data, dict) else None
         grid_pos_raw = data.get("grid_position", [0, 0])
         grid_pos = tuple(grid_pos_raw) if isinstance(grid_pos_raw, (list, tuple)) and len(grid_pos_raw) == 2 else (0, 0)
+
+        gun_meta = None
+        if "gun_metadata" in data and isinstance(data["gun_metadata"], dict):
+            gun_meta = GunMetadata.from_dict(data["gun_metadata"])
+        elif "metadata" in data and isinstance(data["metadata"], dict) and "gun_metadata" in data["metadata"] and isinstance(data["metadata"]["gun_metadata"], dict):
+            gun_meta = GunMetadata.from_dict(data["metadata"]["gun_metadata"])
 
         return cls(
             id=str(data["id"]),
@@ -324,6 +366,7 @@ class DetectedAsset:
             empty=bool(data.get("empty", False)),
             duplicate=bool(data.get("duplicate", False)),
             metadata=dict(data.get("metadata", {})),
+            gun_metadata=gun_meta,
             manual_override=bool(data.get("manual_override", False)),
             review_required=bool(data.get("review_required", False)),
             review_reasons=list(data.get("review_reasons", [])),
@@ -365,6 +408,9 @@ class AccountSession:
         "layout": LAYOUT_VERSION,
     })
     ocr_version: str = OCR_VERSION
+    ocr_results: dict[str, Any] = field(default_factory=dict)
+    uid_candidates: list[dict[str, Any]] = field(default_factory=list)
+    uid_review_required: bool = False
     _sha256_to_id: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
@@ -500,6 +546,34 @@ class AccountSession:
         """Returns only usable (active) assets in a given category."""
         return self.get_assets_by_category(category, include_filtered=False)
 
+    def invalidate_ocr(self, source_id: Optional[str] = None) -> int:
+        """Invalidates OCR results for a specific source or all sources, preserving manual overrides."""
+        count = 0
+        for asset in self.assets:
+            if source_id is None or asset.source_id == source_id:
+                if asset.gun_metadata is not None:
+                    prev_lvl_man = asset.gun_metadata.level_manual
+                    prev_nm_man = asset.gun_metadata.name_manual
+                    prev_cnt_man = asset.gun_metadata.counter_manual
+                    asset.gun_metadata = GunMetadata(
+                        level_manual=prev_lvl_man,
+                        name_manual=prev_nm_man,
+                        counter_manual=prev_cnt_man,
+                    )
+                    count += 1
+        if source_id is None:
+            self.ocr_results.clear()
+            self.uid_candidates.clear()
+            self.uid = None
+            self.uid_confidence = 0.0
+            self.uid_review_required = False
+        else:
+            self.ocr_results.pop(source_id, None)
+            self.uid_candidates = [c for c in self.uid_candidates if c.get("source_id") != source_id]
+        if count > 0 or source_id is None:
+            self.touch()
+        return count
+
     def record_manual_change(self, action: str, details: dict[str, Any]) -> None:
         change_record = {
             "id": uuid.uuid4().hex,
@@ -522,6 +596,9 @@ class AccountSession:
             "detections": {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in self.detections.items()},
             "uid": self.uid,
             "uid_confidence": self.uid_confidence,
+            "uid_review_required": self.uid_review_required,
+            "uid_candidates": self.uid_candidates,
+            "ocr_results": self.ocr_results,
             "layout_settings": self.layout_settings,
             "manual_changes": self.manual_changes,
             "detector_versions": self.detector_versions,
@@ -564,6 +641,9 @@ class AccountSession:
             detections=detections,
             uid=data.get("uid"),
             uid_confidence=float(data.get("uid_confidence", 0.0)),
+            uid_review_required=bool(data.get("uid_review_required", False)),
+            uid_candidates=list(data.get("uid_candidates", [])),
+            ocr_results=dict(data.get("ocr_results", {})),
             layout_settings=dict(data.get("layout_settings", {})),
             manual_changes=list(data.get("manual_changes", [])),
             detector_versions=dict(data.get("detector_versions", {})),
