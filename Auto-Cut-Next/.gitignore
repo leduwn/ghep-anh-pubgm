@@ -1,0 +1,4 @@
+# Ignore Auto-Cut-Next local workspaces, runtime caches, and debug dumps
+workspace/
+cache/
+models/

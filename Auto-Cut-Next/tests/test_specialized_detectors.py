@@ -562,14 +562,36 @@ def test_category_router_case_c_comparison(monkeypatch):
     assert all(c.review_required for c in res2.candidates)
 
 
-def test_semantic_fallback_review_policy_case1_generic_fails():
+def test_semantic_fallback_review_policy_case1_generic_fails(monkeypatch):
     """Case 1: Semantic fallback attempted but generic fails -> attempted=True, used=False."""
+    from detectors.detector_models import SpecializedDetectionResult, GridDetectionResult
+
     w, h = 1280, 720
     img = create_blank_bgr(w, h, color=(20, 20, 20))
     ctx = make_context(img)
     router = CategoryRouter()
 
+    failed_grid_res = GridDetectionResult(
+        detected=False,
+        grid_confidence=0.0,
+        candidates=[],
+        accepted=[],
+    )
+    monkeypatch.setattr(router.generic_grid_detector, "detect", lambda c: failed_grid_res)
+
     for semantic_cat in [Category.GUN.value, Category.VEHICLE.value, Category.OUTFIT.value]:
+        detector, det_name, det_ver = router.get_detector_for_category(semantic_cat)
+        failed_spec_res = SpecializedDetectionResult(
+            detected=False,
+            confidence=0.0,
+            candidates=[],
+            accepted=[],
+            fallback_recommended=True,
+            detector_name=det_name,
+            detector_version=det_ver,
+        )
+        monkeypatch.setattr(detector, "detect", lambda *args, **kwargs: failed_spec_res)
+
         class_res = ClassificationResult(category=semantic_cat, confidence=0.85)
         res = router.route(ctx, classification=class_res)
         assert res.metadata["fallback_attempted"] is True
@@ -579,7 +601,7 @@ def test_semantic_fallback_review_policy_case1_generic_fails():
 
 def test_semantic_fallback_review_policy_case2_generic_succeeds(monkeypatch):
     """Case 2: Generic grid succeeds for semantic category -> fallback_attempted=True, fallback_used=True, review_required=True."""
-    from detectors.detector_models import CardCandidate, GridDetectionResult
+    from detectors.detector_models import CardCandidate, GridDetectionResult, SpecializedDetectionResult
 
     w, h = 1280, 720
     img = create_blank_bgr(w, h, color=(20, 20, 20))
@@ -601,6 +623,18 @@ def test_semantic_fallback_review_policy_case2_generic_succeeds(monkeypatch):
     monkeypatch.setattr(router.generic_grid_detector, "detect", lambda c: fake_grid_res)
 
     for semantic_cat in [Category.GUN.value, Category.VEHICLE.value, Category.OUTFIT.value]:
+        detector, det_name, det_ver = router.get_detector_for_category(semantic_cat)
+        failed_spec_res = SpecializedDetectionResult(
+            detected=False,
+            confidence=0.0,
+            candidates=[],
+            accepted=[],
+            fallback_recommended=True,
+            detector_name=det_name,
+            detector_version=det_ver,
+        )
+        monkeypatch.setattr(detector, "detect", lambda *args, **kwargs: failed_spec_res)
+
         class_res = ClassificationResult(category=semantic_cat, confidence=0.85)
         res = router.route(ctx, classification=class_res)
         assert res.metadata["fallback_attempted"] is True

@@ -32,6 +32,14 @@ def make_gun_screen(w: int = 1280, h: int = 720, seed: int = 0) -> np.ndarray:
     cv2.rectangle(img, (card_x, card_y), (card_x + card_w, card_y + card_h), (30, 140, 240), 6)
     cv2.rectangle(img, (card_x + 6, card_y + 6), (card_x + card_w - 6, card_y + card_h - 6), (70, 70, 70), -1)
 
+    # High-contrast weapon silhouette and texture inside weapon region (guarantees empty=False)
+    cy_mid = card_y + card_h // 2
+    cv2.rectangle(img, (card_x + 30, cy_mid - 25), (card_x + card_w - 30, cy_mid + 20), (20, 20, 20), -1)
+    cv2.rectangle(img, (card_x + 40, cy_mid - 15), (card_x + card_w - 60, cy_mid + 10), (160, 160, 160), 2)
+    for offset in range(card_x + 50, card_x + card_w - 50, 12):
+        cv2.line(img, (offset, cy_mid - 20), (offset + 10, cy_mid + 15), (240, 240, 240), 2)
+        cv2.line(img, (offset + 4, cy_mid - 18), (offset + 14, cy_mid + 12), (10, 10, 10), 1)
+
     # Draw simulated elimination tracker badge with high edge density and high color
     counter_x1, counter_x2 = card_x - 120, card_x - 10
     counter_y1, counter_y2 = int(0.08 * h), int(0.18 * h)
@@ -75,6 +83,7 @@ def test_pipeline_ocr_session_end_to_end(temp_workspace, tmp_path):
     assert len(session.assets) >= 1
     gun_asset = session.assets[0]
     assert gun_asset.category == Category.GUN.value
+    assert gun_asset.empty is False
 
     # 3. Configure FakeOCREngine with level, name, counter, and UID responses
     fake_engine = FakeOCREngine()
@@ -149,6 +158,7 @@ def test_pipeline_ocr_manual_override_preservation(temp_workspace, tmp_path):
 
     assert len(session.assets) >= 1
     gun_asset = session.assets[0]
+    assert gun_asset.empty is False
 
     # Run OCR pass 1 with level 3
     fake_engine = FakeOCREngine(default_observations=[
@@ -203,6 +213,9 @@ def test_pipeline_ocr_single_source_decode(temp_workspace, tmp_path):
         )
     temp_workspace.save_session(session)
     session = pipeline.detect_session(account_id, force=True)
+    assert len(session.assets) >= 2
+    for a in session.assets:
+        assert a.empty is False
 
     initial_decodes = pipeline.metrics.source_decodes
 
@@ -236,6 +249,8 @@ def test_pipeline_ocr_gun_only_preserves_uid(temp_workspace, tmp_path):
     )
     temp_workspace.save_session(session)
     session = pipeline.detect_session(account_id, force=True)
+    assert len(session.assets) >= 1
+    assert session.assets[0].empty is False
 
     # Initial pass: sets both gun and UID
     fake_engine = FakeOCREngine(default_observations=[
@@ -275,6 +290,8 @@ def test_pipeline_ocr_uid_only_preserves_gun_metadata(temp_workspace, tmp_path):
     )
     temp_workspace.save_session(session)
     session = pipeline.detect_session(account_id, force=True)
+    assert len(session.assets) >= 1
+    assert session.assets[0].empty is False
 
     # Initial pass: sets both gun and UID
     fake_engine = FakeOCREngine(default_observations=[

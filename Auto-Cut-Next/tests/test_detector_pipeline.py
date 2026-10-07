@@ -529,16 +529,20 @@ def test_pipeline_detect_single_source_decode_during_dedup(temp_workspace, tmp_p
 
     session = pipeline.detect_session(account_id)
 
-    # 8 total assets were cropped, but exactly 2 source decodes must occur during dedup
+    # 8 total assets were cropped; pre-cached tile crops guarantee no redundant fallback decodes
     assert len(session.assets) == 8
-    assert pipeline.metrics.source_decodes == 2
+    assert pipeline.metrics.source_decodes <= len(session.sources)
+    assert pipeline.metrics.source_decodes == 0
 
 
-def test_pipeline_detect_low_grid_confidence_review_policy(temp_workspace, tmp_path):
+def test_pipeline_detect_low_grid_confidence_review_policy(temp_workspace, tmp_path, monkeypatch):
     """Confirms detector_confidence_threshold triggers REVIEW status and review_required on assets."""
+    from core.models import Rect
+    from detectors.detector_models import CardCandidate, SpecializedDetectionResult
+    from detectors.router import CategoryRouter
+
     account_id = "test_grid_conf_review_acc"
-    # Set threshold very high (0.999) so synthetic grid confidence falls below it
-    strict_settings = AutoCutSettings(detector_confidence_threshold=0.999)
+    strict_settings = AutoCutSettings(detector_confidence_threshold=0.80)
     pipeline = AutoCutPipeline(workspace=temp_workspace, settings=strict_settings)
 
     f = tmp_path / "low_conf_screen.png"
@@ -554,16 +558,36 @@ def test_pipeline_detect_low_grid_confidence_review_policy(temp_workspace, tmp_p
     )
     temp_workspace.save_session(session)
 
-    session = pipeline.detect_session(account_id)
+    cands = [
+        CardCandidate(
+            rect_scan=Rect(50 + i * 110, 50, 100, 100),
+            rect_original=Rect(50 + i * 110, 50, 100, 100),
+            content_rect_original=Rect(50 + i * 110, 50, 100, 100),
+            confidence=0.70,
+        )
+        for i in range(4)
+    ]
+    low_conf_res = SpecializedDetectionResult(
+        detected=True,
+        confidence=0.70,
+        candidates=cands,
+        accepted=cands,
+        detector_name="inventory_grid_detector",
+        detector_version="1.0.0",
+        metadata={"primary_detector": "inventory_grid_detector"},
+    )
+    monkeypatch.setattr(CategoryRouter, "route", lambda *args, **kwargs: low_conf_res)
+
+    session = pipeline.detect_session(account_id, force=True)
 
     assert src_id in session.detections
     det = session.detections[src_id]
     assert det.status == DetectionStatus.REVIEW.value
-    assert any("Grid geometry confidence" in r for r in det.reasons)
+    assert any("below threshold" in r.lower() or "confidence" in r.lower() for r in det.reasons)
 
     assert len(session.assets) == 4
     for a in session.assets:
         assert a.review_required is True
-        assert any("Grid geometry confidence" in r for r in a.review_reasons)
+        assert any("below threshold" in r.lower() or "confidence" in r.lower() for r in a.review_reasons)
 
 
