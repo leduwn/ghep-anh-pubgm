@@ -225,6 +225,8 @@ class GunMetadata:
 
     @property
     def has_counter(self) -> bool:
+        if self.counter_manual is not None:
+            return bool(self.counter_manual.strip())
         return self.counter_present and bool(self.effective_counter)
 
     def to_dict(self) -> dict[str, Any]:
@@ -546,30 +548,52 @@ class AccountSession:
         """Returns only usable (active) assets in a given category."""
         return self.get_assets_by_category(category, include_filtered=False)
 
-    def invalidate_ocr(self, source_id: Optional[str] = None) -> int:
+    def invalidate_ocr(
+        self,
+        source_id: Optional[str] = None,
+        gun_only: bool = False,
+        uid_only: bool = False,
+    ) -> int:
         """Invalidates OCR results for a specific source or all sources, preserving manual overrides."""
         count = 0
-        for asset in self.assets:
-            if source_id is None or asset.source_id == source_id:
-                if asset.gun_metadata is not None:
-                    prev_lvl_man = asset.gun_metadata.level_manual
-                    prev_nm_man = asset.gun_metadata.name_manual
-                    prev_cnt_man = asset.gun_metadata.counter_manual
-                    asset.gun_metadata = GunMetadata(
-                        level_manual=prev_lvl_man,
-                        name_manual=prev_nm_man,
-                        counter_manual=prev_cnt_man,
-                    )
-                    count += 1
-        if source_id is None:
-            self.ocr_results.clear()
-            self.uid_candidates.clear()
-            self.uid = None
-            self.uid_confidence = 0.0
-            self.uid_review_required = False
-        else:
-            self.ocr_results.pop(source_id, None)
-            self.uid_candidates = [c for c in self.uid_candidates if c.get("source_id") != source_id]
+        if not uid_only:
+            for asset in self.assets:
+                if source_id is None or asset.source_id == source_id:
+                    if asset.gun_metadata is not None:
+                        prev_lvl_man = asset.gun_metadata.level_manual
+                        prev_nm_man = asset.gun_metadata.name_manual
+                        prev_cnt_man = asset.gun_metadata.counter_manual
+                        asset.gun_metadata = GunMetadata(
+                            level_manual=prev_lvl_man,
+                            name_manual=prev_nm_man,
+                            counter_manual=prev_cnt_man,
+                        )
+                        count += 1
+            if source_id is None:
+                self.ocr_results.clear()
+            else:
+                source_asset_ids = {a.id for a in self.assets if a.source_id == source_id}
+                for aid in source_asset_ids:
+                    self.ocr_results.pop(aid, None)
+                self.ocr_results.pop(source_id, None)
+
+        if not gun_only:
+            if source_id is None:
+                self.uid_candidates.clear()
+                self.uid = None
+                self.uid_confidence = 0.0
+                self.uid_review_required = False
+            else:
+                self.uid_candidates = [c for c in self.uid_candidates if c.get("source_id") != source_id]
+                if not self.uid_candidates:
+                    self.uid = None
+                    self.uid_confidence = 0.0
+                    self.uid_review_required = False
+
+        # Prune orphan OCR records not matching any known asset or source
+        valid_ids = {a.id for a in self.assets} | set(self.sources.keys())
+        self.ocr_results = {k: v for k, v in self.ocr_results.items() if k in valid_ids}
+
         if count > 0 or source_id is None:
             self.touch()
         return count

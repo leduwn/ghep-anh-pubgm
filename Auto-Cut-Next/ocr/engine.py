@@ -85,7 +85,7 @@ class EasyOCREngine(OCREngine):
         self.download_enabled = download_enabled
         self.on_gpu_fallback = on_gpu_fallback
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._reader: Any = None
         self._active_device: str = "uninitialized"
         self._is_gpu: bool = False
@@ -255,7 +255,7 @@ class FakeOCREngine(OCREngine):
     """Deterministic, thread-safe fake OCR engine for offline unit and integration tests."""
 
     def __init__(self, default_observations: Optional[list[OCRObservation]] = None):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.default_observations = default_observations or []
         self._responses: dict[str, list[OCRObservation]] = {}
         self._patterns: list[tuple[str, list[OCRObservation]]] = []

@@ -22,13 +22,13 @@ from app.pipeline import AutoCutPipeline
 def run_self_test() -> int:
     """Verifies environment, imports, models, settings, atomic session, cache, logger, classifier, and generic detector."""
     print("=" * 60)
-    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 4)")
+    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 5)")
     print("=" * 60)
 
     import tempfile
 
     # 1. Imports
-    print("[1/8] Checking core imports...")
+    print("[1/10] Checking core imports...")
     try:
         from core.models import SourceImage, Rect, DetectedAsset, AccountSession
         from core.ingest import ImageIngestor
@@ -40,7 +40,7 @@ def run_self_test() -> int:
         return 1
 
     # 2. Settings validation & canonical default loading
-    print("[2/8] Validating settings & canonical default...")
+    print("[2/10] Validating settings & canonical default...")
     try:
         settings = AutoCutSettings.load_default()
         settings.validate()
@@ -181,7 +181,7 @@ def run_self_test() -> int:
         return 1
 
     # 9. Specialized detectors & CategoryRouter smoke test
-    print("[9/9] Testing specialized PUBG detectors & CategoryRouter...")
+    print("[9/10] Testing specialized PUBG detectors & CategoryRouter...")
     try:
         from core.models import ClassificationResult
         from detectors import CategoryRouter
@@ -205,11 +205,13 @@ def run_self_test() -> int:
         assert res_spec.metadata.get("fallback_used") is False
         ctx_spec.close()
 
-        # Shared-context fallback test
+        # Shared-context fallback test on blank screen
         blank_img = np.zeros((h, w, 3), dtype=np.uint8)
         ctx_blank = DetectionContext(blank_img)
         res_fb = router.route(ctx_blank, classification=ClassificationResult(Category.GUN.value, 0.90))
-        assert res_fb.metadata.get("fallback_used") is True
+        assert res_fb.metadata.get("fallback_attempted") is True
+        assert res_fb.metadata.get("fallback_used") is False
+        assert res_fb.detected is False
         assert res_fb.metadata.get("primary_detector") == "gun_workshop_detector"
         assert res_fb.metadata.get("fallback_detector") == "generic_grid_detector"
         ctx_blank.close()

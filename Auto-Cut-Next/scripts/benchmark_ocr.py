@@ -143,7 +143,7 @@ def benchmark_two_level_cache(iterations: int = 5000):
 
 def benchmark_end_to_end_extractor(iterations: int = 500):
     print("=" * 60)
-    print("4. SIMULATED END-TO-END GUN OCR EXTRACTION")
+    print("4. SIMULATED FAKE OCR PIPELINE (OFFLINE / SYNTHETIC)")
     print("=" * 60)
 
     fake_engine = FakeOCREngine(default_observations=[
@@ -170,7 +170,7 @@ def benchmark_end_to_end_extractor(iterations: int = 500):
         res = extractor.extract(dummy_img, source_sha256="sha_bench", asset=asset)
     t_elapsed = time.perf_counter() - t0
     ops = iterations / t_elapsed
-    print(f"End-to-End Gun OCR Pipeline: {ops:8.1f} assets/s ({(t_elapsed/iterations)*1000.0:.3f} ms/asset)")
+    print(f"Simulated Fake OCR Pipeline: {ops:8.1f} assets/s ({(t_elapsed/iterations)*1000.0:.3f} ms/asset)")
     print("=" * 60)
 
 

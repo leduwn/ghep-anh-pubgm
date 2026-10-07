@@ -128,8 +128,17 @@ def resolve_uid_consensus(
     elif best_src_count > 1:
         reasons.append(f"UID corroborated across {best_src_count} independent sources")
 
+    accepted_uid: Optional[str] = best_uid
+    if has_conflict:
+        accepted_uid = None
+        reasons.append("UID rejected due to multi-source conflict")
+    elif best_conf < accept_threshold:
+        accepted_uid = None
+        review_required = True
+        reasons.append(f"UID confidence below accept threshold ({best_conf:.2f} < {accept_threshold:.2f})")
+
     return UIDConsensusResult(
-        uid=best_uid,
+        uid=accepted_uid,
         confidence=round(best_conf, 3),
         candidates=candidates,
         sources_count=best_src_count,

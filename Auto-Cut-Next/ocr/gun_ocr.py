@@ -136,9 +136,12 @@ class GunOCRExtractor:
         if w_name is None:
             review_required = True
             review_reasons.append("Weapon name could not be identified")
-        if ocr_conf < self.review_threshold:
+        if ocr_conf < self.accept_threshold:
             review_required = True
-            review_reasons.append(f"OCR overall confidence below threshold ({ocr_conf:.2f} < {self.review_threshold:.2f})")
+            review_reasons.append(f"OCR overall confidence below accept threshold ({ocr_conf:.2f} < {self.accept_threshold:.2f})")
+        if asset.metadata.get("fallback_used") or asset.detector == "generic_grid_detector":
+            review_required = True
+            review_reasons.append("Semantic generic GUN fallback requires review")
 
         return GunOCRResult(
             level=level,

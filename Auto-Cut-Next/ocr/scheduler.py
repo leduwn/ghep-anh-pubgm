@@ -162,12 +162,15 @@ class OCRScheduler:
                 accept_threshold=self.settings.ocr_accept_threshold,
                 review_threshold=self.settings.ocr_review_threshold,
             )
-            session.uid = consensus.uid
+            if consensus.has_conflict or consensus.confidence < self.settings.ocr_accept_threshold:
+                session.uid = None
+            else:
+                session.uid = consensus.uid
             session.uid_confidence = consensus.confidence
             session.uid_review_required = consensus.review_required
             session.uid_candidates = [c.to_dict() for c in all_uid_candidates]
 
-            if consensus.uid:
+            if session.uid:
                 self.metrics.ocr_uids_found += 1
             if consensus.has_conflict:
                 self.metrics.ocr_uids_conflicts += 1

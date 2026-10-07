@@ -776,7 +776,7 @@ class AutoCutPipeline:
         )
 
         if force:
-            session.invalidate_ocr()
+            session.invalidate_ocr(gun_only=gun_only, uid_only=uid_only)
 
         scheduler = OCRScheduler(
             engine=engine,
