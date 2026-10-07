@@ -762,7 +762,7 @@ class AutoCutPipeline:
         created_engine = False
         if engine is None:
             created_engine = True
-            models_dir = self.workspace.root_dir / "models" / "easyocr"
+            models_dir = self.workspace.workspace_root / "models" / "easyocr"
             engine = EasyOCREngine(
                 model_storage_dir=models_dir,
                 device=self.settings.ocr_device,
@@ -771,7 +771,7 @@ class AutoCutPipeline:
             )
 
         ocr_cache = OCRCache(
-            cache_dir=self.workspace.root_dir / "cache" / "ocr",
+            cache_dir=self.workspace.workspace_root / "cache" / "ocr",
             memory_capacity=self.settings.ocr_cache_size,
         )
 

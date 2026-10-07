@@ -333,8 +333,12 @@ def test_session_invalidate_ocr_prunes_asset_keys_and_orphans(temp_workspace):
     from core.models import AccountSession, DetectedAsset, GunMetadata, SourceImage
 
     session = AccountSession(account_id="test_inval_acc")
-    session.sources["s1"] = SourceImage(id="s1", path="p1", sha256="h1", width=100, height=100)
-    session.sources["s2"] = SourceImage(id="s2", path="p2", sha256="h2", width=100, height=100)
+    session.sources["s1"] = SourceImage(
+        id="s1", path="p1.png", sha256="h1", filename="p1.png", width=100, height=100, mtime=1000.0, source_index=0
+    )
+    session.sources["s2"] = SourceImage(
+        id="s2", path="p2.png", sha256="h2", filename="p2.png", width=100, height=100, mtime=1000.0, source_index=1
+    )
 
     a1 = DetectedAsset("a1", "s1", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0", gun_metadata=GunMetadata(level=3))
     a2 = DetectedAsset("a2", "s2", "GUN", Rect(0, 0, 10, 10), 10, 10, "det", "1.0", gun_metadata=GunMetadata(level=4))
@@ -355,4 +359,30 @@ def test_session_invalidate_ocr_prunes_asset_keys_and_orphans(temp_workspace):
     assert "orphan_key" not in session.ocr_results
     # a2 must remain
     assert "a2" in session.ocr_results
+
+
+def test_pipeline_ocr_session_constructs_cache_without_attribute_error(temp_workspace, tmp_path):
+    """Regression test: pipeline.ocr_session constructs OCR cache using workspace_root without AttributeError."""
+    account_id = "test_cache_construct_acc"
+    pipeline = AutoCutPipeline(workspace=temp_workspace)
+
+    screen = make_gun_screen()
+    file_path = tmp_path / "screen_cache_test.png"
+    cv2.imwrite(str(file_path), screen)
+
+    session = pipeline.ingest_sources(account_id, [file_path])
+    src_id = next(iter(session.sources.keys()))
+    session.classifications[src_id] = ClassificationResult(
+        category=Category.GUN.value,
+        confidence=0.98,
+        decision=Decision.AUTO_ACCEPT.value,
+        detector_version=CLASSIFIER_VERSION,
+    )
+    temp_workspace.save_session(session)
+    pipeline.detect_session(account_id, force=True)
+
+    fake_engine = FakeOCREngine()
+    res_session = pipeline.ocr_session(account_id, engine=fake_engine)
+    assert res_session is not None
+    assert (temp_workspace.workspace_root / "cache" / "ocr").exists()
 

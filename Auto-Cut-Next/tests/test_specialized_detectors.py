@@ -28,7 +28,7 @@ from detectors.equipment_detector import EquipmentDetector
 from detectors.accessory_detector import AccessoryDetector
 from detectors.inventory_detector import InventoryDetector
 from detectors.router import CategoryRouter
-from detectors.dedup import AccountDeduplicator, DedupProfile, DEFAULT_CATEGORY_DEDUP_PROFILES
+from detectors.dedup import AccountDeduplicator, DedupProfile, DEFAULT_CATEGORY_DEDUP_PROFILES, are_visually_identical
 
 
 def create_blank_bgr(w: int = 1280, h: int = 720, color: tuple[int, int, int] = (20, 20, 20)) -> np.ndarray:
@@ -562,27 +562,50 @@ def test_category_router_case_c_comparison(monkeypatch):
     assert all(c.review_required for c in res2.candidates)
 
 
-def test_semantic_fallback_review_policy():
-    """Generic grid fallback for GUN, VEHICLE, and OUTFIT enforces review_required=True."""
-    w, h = 1920, 1080
+def test_semantic_fallback_review_policy_case1_generic_fails():
+    """Case 1: Semantic fallback attempted but generic fails -> attempted=True, used=False."""
+    w, h = 1280, 720
     img = create_blank_bgr(w, h, color=(20, 20, 20))
-
-    start_x = int(0.20 * w)
-    start_y = int(0.20 * h)
-    for r in range(2):
-        for c in range(2):
-            tx = start_x + c * 150
-            ty = start_y + r * 150
-            cv2.rectangle(img, (tx, ty), (tx + 120, ty + 120), (180, 180, 180), 2)
-            cv2.rectangle(img, (tx + 4, ty + 4), (tx + 116, ty + 116), (70, 70, 70), -1)
-
     ctx = make_context(img)
     router = CategoryRouter()
 
     for semantic_cat in [Category.GUN.value, Category.VEHICLE.value, Category.OUTFIT.value]:
         class_res = ClassificationResult(category=semantic_cat, confidence=0.85)
         res = router.route(ctx, classification=class_res)
+        assert res.metadata["fallback_attempted"] is True
+        assert res.metadata["fallback_used"] is False
+        assert res.detected is False
+
+
+def test_semantic_fallback_review_policy_case2_generic_succeeds(monkeypatch):
+    """Case 2: Generic grid succeeds for semantic category -> fallback_attempted=True, fallback_used=True, review_required=True."""
+    from detectors.detector_models import CardCandidate, GridDetectionResult
+
+    w, h = 1280, 720
+    img = create_blank_bgr(w, h, color=(20, 20, 20))
+    ctx = make_context(img)
+    router = CategoryRouter()
+
+    cand = CardCandidate(
+        rect_scan=Rect(100, 100, 80, 80),
+        rect_original=Rect(100, 100, 80, 80),
+        content_rect_original=Rect(100, 100, 80, 80),
+        confidence=0.90,
+    )
+    fake_grid_res = GridDetectionResult(
+        detected=True,
+        grid_confidence=0.88,
+        candidates=[cand],
+        accepted=[cand],
+    )
+    monkeypatch.setattr(router.generic_grid_detector, "detect", lambda c: fake_grid_res)
+
+    for semantic_cat in [Category.GUN.value, Category.VEHICLE.value, Category.OUTFIT.value]:
+        class_res = ClassificationResult(category=semantic_cat, confidence=0.85)
+        res = router.route(ctx, classification=class_res)
+        assert res.metadata["fallback_attempted"] is True
         assert res.metadata["fallback_used"] is True
+        assert res.detected is True
 
         assets = router.create_assets_from_result(res, ctx, category=semantic_cat)
         assert len(assets) > 0

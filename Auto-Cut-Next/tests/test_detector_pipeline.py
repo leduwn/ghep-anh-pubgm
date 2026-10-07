@@ -142,9 +142,10 @@ def test_pipeline_detect_cross_source_deduplication(temp_workspace, tmp_path):
     account_id = "test_dedup_acc"
     pipeline = AutoCutPipeline(workspace=temp_workspace)
 
-    # Two screenshots sharing duplicate cards
+    # Two screenshots sharing identical duplicate cards, but distinct SHA-256 outside card ROI
     img1 = make_grid_image(rows=1, cols=2, seed=99)
-    img2 = make_grid_image(rows=1, cols=2, seed=99)  # identical tiles
+    img2 = make_grid_image(rows=1, cols=2, seed=99)
+    img2[10, 10] = (255, 0, 0)  # harmless background pixel outside card region
 
     f1 = tmp_path / "f1.png"
     f2 = tmp_path / "f2.png"
@@ -152,6 +153,7 @@ def test_pipeline_detect_cross_source_deduplication(temp_workspace, tmp_path):
     cv2.imwrite(str(f2), img2)
 
     session = pipeline.ingest_sources(account_id, [f1, f2])
+    assert len(session.sources) == 2
     src_ids = list(session.sources.keys())
 
     for sid in src_ids:
@@ -260,8 +262,12 @@ def test_pipeline_detect_stale_classifier_version(temp_workspace, tmp_path):
     assert len(session.assets) == 0
 
 
-def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
+def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path, monkeypatch):
     """Re-running detection with route switch purges previous route's assets completely."""
+    from core.models import Rect
+    from detectors.detector_models import CardCandidate, SpecializedDetectionResult
+    from detectors.router import CategoryRouter
+
     account_id = "test_switch_acc"
     pipeline = AutoCutPipeline(workspace=temp_workspace)
 
@@ -272,7 +278,55 @@ def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
     session = pipeline.ingest_sources(account_id, [f])
     src_id = next(iter(session.sources.keys()))
 
-    # Run 1: Classified as ITEM_SET (inventory_grid_detector)
+    cands_run1 = [
+        CardCandidate(
+            rect_scan=Rect(50, 50, 100, 100),
+            rect_original=Rect(50, 50, 100, 100),
+            content_rect_original=Rect(50, 50, 100, 100),
+            confidence=0.95,
+        ),
+        CardCandidate(
+            rect_scan=Rect(200, 50, 100, 100),
+            rect_original=Rect(200, 50, 100, 100),
+            content_rect_original=Rect(200, 50, 100, 100),
+            confidence=0.95,
+        ),
+    ]
+    res_run1 = SpecializedDetectionResult(
+        detected=True,
+        confidence=0.95,
+        candidates=cands_run1,
+        accepted=cands_run1,
+        detector_name="inventory_grid_detector",
+        detector_version="1.0.0",
+        metadata={"primary_detector": "inventory_grid_detector"},
+    )
+
+    cands_run2 = [
+        CardCandidate(
+            rect_scan=Rect(60, 60, 90, 90),
+            rect_original=Rect(60, 60, 90, 90),
+            content_rect_original=Rect(60, 60, 90, 90),
+            confidence=0.90,
+        ),
+        CardCandidate(
+            rect_scan=Rect(210, 60, 90, 90),
+            rect_original=Rect(210, 60, 90, 90),
+            content_rect_original=Rect(210, 60, 90, 90),
+            confidence=0.90,
+        ),
+    ]
+    res_run2 = SpecializedDetectionResult(
+        detected=True,
+        confidence=0.90,
+        candidates=cands_run2,
+        accepted=cands_run2,
+        detector_name="generic_grid_detector",
+        detector_version="1.0.0",
+        metadata={"primary_detector": "generic_grid_detector"},
+    )
+
+    # Run 1: Final detector = inventory_grid_detector (2 assets)
     session.classifications[src_id] = ClassificationResult(
         category=Category.ITEM_SET.value,
         confidence=0.95,
@@ -280,25 +334,33 @@ def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
+
+    monkeypatch.setattr(CategoryRouter, "route", lambda *args, **kwargs: res_run1)
     session = pipeline.detect_session(account_id, force=True)
 
     assert len(session.assets) == 2
     assert all(a.detector == "inventory_grid_detector" for a in session.assets)
+    run1_ids = {a.id for a in session.assets}
 
-    # Run 2: Reclassified as HELMET (equipment_grid_detector) with force=True
+    # Run 2: Re-run detection, final detector = generic_grid_detector (2 replacement assets)
     session.classifications[src_id] = ClassificationResult(
-        category=Category.HELMET.value,
+        category=Category.ITEM_SET.value,
         confidence=0.95,
         decision=Decision.AUTO_ACCEPT.value,
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
+
+    monkeypatch.setattr(CategoryRouter, "route", lambda *args, **kwargs: res_run2)
     session = pipeline.detect_session(account_id, force=True)
 
-    # Must NOT accumulate: still exactly 2 assets, all from equipment_grid_detector
+    # Must NOT accumulate: still exactly 2 assets, old specialized absent, new generic present
     assert len(session.assets) == 2
-    assert all(a.detector == "equipment_grid_detector" for a in session.assets)
-    assert not any(a.detector == "inventory_grid_detector" for a in session.assets)
+    assert all(a.detector == "generic_grid_detector" for a in session.assets)
+    run2_ids = {a.id for a in session.assets}
+    assert run1_ids.isdisjoint(run2_ids)
+    assert not any(a.id in run1_ids for a in session.assets)
+    assert all(a.id in run2_ids for a in session.assets)
 
 
 def test_pipeline_gating_unknown_error_other(temp_workspace, tmp_path):
@@ -465,7 +527,7 @@ def test_pipeline_detect_single_source_decode_during_dedup(temp_workspace, tmp_p
         )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     # 8 total assets were cropped, but exactly 2 source decodes must occur during dedup
     assert len(session.assets) == 8
@@ -492,7 +554,7 @@ def test_pipeline_detect_low_grid_confidence_review_policy(temp_workspace, tmp_p
     )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     assert src_id in session.detections
     det = session.detections[src_id]

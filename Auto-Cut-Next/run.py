@@ -53,7 +53,7 @@ def run_self_test() -> int:
         return 1
 
     # 3. Workspace atomic session write
-    print("[3/8] Testing atomic workspace session write & schema check...")
+    print("[3/10] Testing atomic workspace session write & schema check...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             ws = WorkspaceManager(temp_dir)
@@ -69,7 +69,7 @@ def run_self_test() -> int:
         return 1
 
     # 4. Ingestor & Sandbox enforcement
-    print("[4/8] Checking ingestor & sandbox traversal protection...")
+    print("[4/10] Checking ingestor & sandbox traversal protection...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -92,7 +92,7 @@ def run_self_test() -> int:
         return 1
 
     # 5. Atomic DiskCache & corruption recovery
-    print("[5/8] Testing atomic disk cache & corruption recovery...")
+    print("[5/10] Testing atomic disk cache & corruption recovery...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = DiskCache(temp_dir)
@@ -110,7 +110,7 @@ def run_self_test() -> int:
         return 1
 
     # 6. Logger isolation & lifecycle
-    print("[6/8] Testing logger instance isolation & cleanup...")
+    print("[6/10] Testing logger instance isolation & cleanup...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -136,7 +136,7 @@ def run_self_test() -> int:
         return 1
 
     # 7. Classifier smoke test
-    print("[7/8] Testing screen classifier initialization & smoke categorization...")
+    print("[7/10] Testing screen classifier initialization & smoke categorization...")
     try:
         import numpy as np
         from core.constants import Category, Decision
@@ -155,7 +155,7 @@ def run_self_test() -> int:
         return 1
 
     # 8. Generic grid detector smoke test
-    print("[8/8] Testing generic grid detector & card quality smoke test...")
+    print("[8/10] Testing generic grid detector & card quality smoke test...")
     try:
         import cv2
         import numpy as np
