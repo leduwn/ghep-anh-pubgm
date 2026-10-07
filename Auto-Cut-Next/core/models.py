@@ -403,9 +403,12 @@ class AccountSession:
     classifications: dict[str, ClassificationResult] = field(default_factory=dict)
     detections: dict[str, Any] = field(default_factory=dict)
     uid: Optional[str] = None
+    uid_manual: Optional[str] = None
     uid_confidence: float = 0.0
     layout_settings: dict[str, Any] = field(default_factory=dict)
     manual_changes: list[dict[str, Any]] = field(default_factory=list)
+    review_items: dict[str, Any] = field(default_factory=dict)
+    review_history: list[Any] = field(default_factory=list)
     detector_versions: dict[str, str] = field(default_factory=lambda: {
         "classifier": CLASSIFIER_VERSION,
         "gun_detector": GUN_DETECTOR_VERSION,
@@ -421,6 +424,10 @@ class AccountSession:
     def __post_init__(self):
         self.uid_confidence = validate_confidence(self.uid_confidence, "uid_confidence")
         self._rebuild_sha256_index()
+
+    @property
+    def effective_uid(self) -> Optional[str]:
+        return self.uid_manual if self.uid_manual is not None else self.uid
 
     def _rebuild_sha256_index(self) -> None:
         self._sha256_to_id = {src.sha256: src.id for src in self.sources.values() if src.sha256}
@@ -622,12 +629,15 @@ class AccountSession:
             "classifications": {k: v.to_dict() for k, v in self.classifications.items()},
             "detections": {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in self.detections.items()},
             "uid": self.uid,
+            "uid_manual": self.uid_manual,
             "uid_confidence": self.uid_confidence,
             "uid_review_required": self.uid_review_required,
             "uid_candidates": self.uid_candidates,
             "ocr_results": self.ocr_results,
             "layout_settings": self.layout_settings,
             "manual_changes": self.manual_changes,
+            "review_items": {k: (v.to_dict() if hasattr(v, "to_dict") else v) for k, v in self.review_items.items()},
+            "review_history": [(a.to_dict() if hasattr(a, "to_dict") else a) for a in self.review_history],
             "detector_versions": self.detector_versions,
             "ocr_version": self.ocr_version,
         }
@@ -658,6 +668,32 @@ class AccountSession:
             else:
                 detections[k] = v
 
+        review_items_raw = data.get("review_items", {})
+        review_items = {}
+        if isinstance(review_items_raw, dict):
+            from review.models import ReviewItem
+            for k, v in review_items_raw.items():
+                if isinstance(v, dict):
+                    try:
+                        review_items[k] = ReviewItem.from_dict(v)
+                    except Exception:
+                        review_items[k] = v
+                else:
+                    review_items[k] = v
+
+        review_history_raw = data.get("review_history", [])
+        review_history = []
+        if isinstance(review_history_raw, list):
+            from review.models import ReviewAction
+            for a in review_history_raw:
+                if isinstance(a, dict):
+                    try:
+                        review_history.append(ReviewAction.from_dict(a))
+                    except Exception:
+                        review_history.append(a)
+                else:
+                    review_history.append(a)
+
         return cls(
             account_id=str(data["account_id"]),
             version=int(data.get("version", SESSION_SCHEMA_VERSION)),
@@ -668,12 +704,15 @@ class AccountSession:
             classifications=classifications,
             detections=detections,
             uid=data.get("uid"),
+            uid_manual=data.get("uid_manual"),
             uid_confidence=float(data.get("uid_confidence", 0.0)),
             uid_review_required=bool(data.get("uid_review_required", False)),
             uid_candidates=list(data.get("uid_candidates", [])),
             ocr_results=dict(data.get("ocr_results", {})),
             layout_settings=dict(data.get("layout_settings", {})),
             manual_changes=list(data.get("manual_changes", [])),
+            review_items=review_items,
+            review_history=review_history,
             detector_versions=dict(data.get("detector_versions", {})),
             ocr_version=str(data.get("ocr_version", OCR_VERSION)),
         )

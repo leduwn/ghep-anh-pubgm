@@ -75,6 +75,13 @@ class MetricsCollector:
     ocr_cache_hits: int = 0
     ocr_cache_misses: int = 0
 
+    # Review Metrics
+    review_items_generated: int = 0
+    review_items_open: int = 0
+    review_items_resolved_manual: int = 0
+    review_items_resolved_machine_accept: int = 0
+    review_items_stale: int = 0
+
     sources_classified: int = 0
     sources_unknown: int = 0
     assets_detected: int = 0
@@ -154,6 +161,11 @@ class MetricsCollector:
             f"OCR Counters Found: {self.ocr_counters_found}",
             f"OCR UIDs Found:     {self.ocr_uids_found}",
             f"OCR Cache Hits:     {self.ocr_cache_hits}",
+            f"Review Items Gen:   {self.review_items_generated}",
+            f"Review Items Open:  {self.review_items_open}",
+            f"Review Res Manual:  {self.review_items_resolved_manual}",
+            f"Review Res Machine: {self.review_items_resolved_machine_accept}",
+            f"Review Res Stale:   {self.review_items_stale}",
             "-" * 50,
         ]
         for stage, dur in self.durations.items():

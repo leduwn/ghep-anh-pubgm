@@ -22,7 +22,7 @@ from app.pipeline import AutoCutPipeline
 def run_self_test() -> int:
     """Verifies environment, imports, models, settings, atomic session, cache, logger, classifier, and generic detector."""
     print("=" * 60)
-    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 5)")
+    print(f"      {APP_NAME} v{APP_VERSION} - SELF-TEST (MILESTONE 6)")
     print("=" * 60)
 
     import tempfile
@@ -261,8 +261,85 @@ def run_self_test() -> int:
         print(f"      FAIL: OCR smoke test error: {exc}")
         return 1
 
+    # 11. Review Engine & Manual Resolution Workflow
+    print("[11/11] Testing review queue builder, deterministic IDs, staleness, and manual resolution...")
+    try:
+        from core.models import AccountSession, SourceImage, ClassificationResult, DetectedAsset, Rect, GunMetadata
+        from core.constants import ReviewSubsystem, ReviewStatus, ReviewPriority, ReviewReason, Decision
+        from review.review_builder import ReviewQueueBuilder
+        from review.review_service import ReviewService
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ws = WorkspaceManager(temp_dir)
+            session = AccountSession(account_id="self_test_review")
+
+            # Add source and classification needing review
+            src = SourceImage(id="src_1", filename="screen_1.png", path=temp_dir, sha256="abc123", source_index=0)
+            session.sources[src.id] = src
+            session.classifications[src.id] = ClassificationResult(
+                category="GUN",
+                confidence=0.55,
+                decision=Decision.REVIEW.value,
+                detector_version="2.0.0",
+            )
+
+            # Add Gun asset with low level confidence
+            asset = DetectedAsset(
+                id="asset_gun_1",
+                source_id=src.id,
+                category="GUN",
+                crop_rect=Rect(10, 10, 100, 100),
+                gun_metadata=GunMetadata(
+                    weapon_name="M416",
+                    name_confidence=0.95,
+                    level=3,
+                    level_confidence=0.45,
+                    level_source="test",
+                    counter_present=True,
+                    kill_counter=None,
+                    counter_confidence=0.0,
+                ),
+            )
+            session.assets.append(asset)
+
+            # Build review queue
+            builder = ReviewQueueBuilder()
+            items = builder.build_queue(session)
+            assert len(items) >= 3  # classification, ocr level, ocr counter (badge present!)
+            assert any(it.subsystem == ReviewSubsystem.CLASSIFICATION.value for it in items)
+            assert any(it.subsystem == ReviewSubsystem.OCR_GUN.value and it.field_name == "level" for it in items)
+            assert any(it.subsystem == ReviewSubsystem.OCR_GUN.value and it.field_name == "counter" for it in items)
+
+            # Service manual resolution
+            service = ReviewService(session=session, workspace=ws)
+            # Manual override level
+            res_lvl = service.set_level("asset_gun_1", 4, notes="Manually verified level 4")
+            assert res_lvl.status == ReviewStatus.RESOLVED_MANUAL.value
+            assert asset.gun_metadata.level_manual == 4
+            assert asset.gun_metadata.effective_level == 4
+
+            # Manual UID override
+            res_uid = service.set_uid("5123456789", notes="Confirmed UID")
+            assert res_uid.status == ReviewStatus.RESOLVED_MANUAL.value
+            assert session.effective_uid == "5123456789"
+
+            # Category override with downstream invalidation
+            res_cat = service.set_category("src_1", "VEHICLE", notes="Actually vehicle")
+            assert res_cat.status == ReviewStatus.RESOLVED_MANUAL.value
+            assert len(session.assets) == 0  # Invalidated downstream gun asset!
+            assert len(session.review_history) >= 3  # Audit actions recorded
+
+            # Rebuild queue: gun asset OCR review items pruned
+            rebuilt = builder.build_queue(session)
+            assert not any(it.asset_id == "asset_gun_1" for it in rebuilt)
+
+        print("      PASS: Review queue builder, manual resolutions, and downstream invalidation verified.")
+    except Exception as exc:
+        print(f"      FAIL: Review system self-test error: {exc}")
+        return 1
+
     print("=" * 60)
-    print("      ALL 10 SELF-TESTS PASSED SUCCESSFULLY!")
+    print("      ALL 11 SELF-TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
     return 0
 
@@ -308,6 +385,96 @@ def main() -> int:
     # Command: info
     info_p = subparsers.add_parser("info", help="Display account session summary")
     info_p.add_argument("account", help="Account identifier")
+
+    # Command: review
+    review_p = subparsers.add_parser("review", help="Unified review queue and manual correction workflow")
+    review_sub = review_p.add_subparsers(dest="review_action", help="Review actions")
+
+    # review build <account>
+    r_build = review_sub.add_parser("build", help="Build or refresh review queue for account")
+    r_build.add_argument("account", help="Account identifier")
+
+    # review list <account> [--status ...] [--priority ...] [--subsystem ...] [--json]
+    r_list = review_sub.add_parser("list", help="List review items for account")
+    r_list.add_argument("account", help="Account identifier")
+    r_list.add_argument("--status", choices=["OPEN", "RESOLVED_AUTO", "RESOLVED_MANUAL", "REJECTED", "SKIPPED", "STALE"], help="Filter by review status")
+    r_list.add_argument("--priority", choices=["P0", "P1", "P2", "P3"], help="Filter by priority")
+    r_list.add_argument("--subsystem", choices=["CLASSIFICATION", "DETECTION", "ASSET_QUALITY", "OCR_GUN", "UID"], help="Filter by subsystem")
+    r_list.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+
+    # review show <account> <item_id> [--json]
+    r_show = review_sub.add_parser("show", help="Show details for a specific review item")
+    r_show.add_argument("account", help="Account identifier")
+    r_show.add_argument("item_id", help="Review item ID")
+    r_show.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+
+    # review accept <account> <item_id> [--notes ...]
+    r_accept = review_sub.add_parser("accept", help="Accept machine recommendation for item")
+    r_accept.add_argument("account", help="Account identifier")
+    r_accept.add_argument("item_id", help="Review item ID")
+    r_accept.add_argument("--notes", help="Optional resolution notes")
+
+    # review set-category <account> <source_id> <category> [--notes ...]
+    r_set_cat = review_sub.add_parser("set-category", help="Override classification category")
+    r_set_cat.add_argument("account", help="Account identifier")
+    r_set_cat.add_argument("source_id", help="Source image ID")
+    r_set_cat.add_argument("category", help="Target category (GUN, VEHICLE, OUTFIT, etc.)")
+    r_set_cat.add_argument("--notes", help="Optional resolution notes")
+
+    # review set-level <account> <asset_id> <level> [--notes ...]
+    r_set_lvl = review_sub.add_parser("set-level", help="Override weapon level on Gun asset")
+    r_set_lvl.add_argument("account", help="Account identifier")
+    r_set_lvl.add_argument("asset_id", help="Asset ID")
+    r_set_lvl.add_argument("level", type=int, help="Weapon level (1-100)")
+    r_set_lvl.add_argument("--notes", help="Optional resolution notes")
+
+    # review set-name <account> <asset_id> <name> [--notes ...]
+    r_set_nm = review_sub.add_parser("set-name", help="Override weapon name on Gun asset")
+    r_set_nm.add_argument("account", help="Account identifier")
+    r_set_nm.add_argument("asset_id", help="Asset ID")
+    r_set_nm.add_argument("name", help="Canonical weapon name")
+    r_set_nm.add_argument("--notes", help="Optional resolution notes")
+
+    # review set-counter <account> <asset_id> <counter> [--notes ...]
+    r_set_cnt = review_sub.add_parser("set-counter", help="Override kill counter on Gun asset")
+    r_set_cnt.add_argument("account", help="Account identifier")
+    r_set_cnt.add_argument("asset_id", help="Asset ID")
+    r_set_cnt.add_argument("counter", help="Kill counter value")
+    r_set_cnt.add_argument("--notes", help="Optional resolution notes")
+
+    # review clear-counter <account> <asset_id> [--notes ...]
+    r_clr_cnt = review_sub.add_parser("clear-counter", help="Clear counter requirement (badge absent)")
+    r_clr_cnt.add_argument("account", help="Account identifier")
+    r_clr_cnt.add_argument("asset_id", help="Asset ID")
+    r_clr_cnt.add_argument("--notes", help="Optional resolution notes")
+
+    # review set-uid <account> <uid> [--notes ...]
+    r_set_uid = review_sub.add_parser("set-uid", help="Override account UID (8-14 digits)")
+    r_set_uid.add_argument("account", help="Account identifier")
+    r_set_uid.add_argument("uid", help="Account UID (8-14 digits)")
+    r_set_uid.add_argument("--notes", help="Optional resolution notes")
+
+    # review reject <account> <item_id> [--notes ...]
+    r_rej = review_sub.add_parser("reject", help="Reject a review item")
+    r_rej.add_argument("account", help="Account identifier")
+    r_rej.add_argument("item_id", help="Review item ID")
+    r_rej.add_argument("--notes", help="Optional resolution notes")
+
+    # review skip <account> <item_id> [--notes ...]
+    r_skip = review_sub.add_parser("skip", help="Skip a review item for now")
+    r_skip.add_argument("account", help="Account identifier")
+    r_skip.add_argument("item_id", help="Review item ID")
+    r_skip.add_argument("--notes", help="Optional resolution notes")
+
+    # review history <account> [--json]
+    r_hist = review_sub.add_parser("history", help="Show review audit action history")
+    r_hist.add_argument("account", help="Account identifier")
+    r_hist.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+
+    # review summary <account> [--json]
+    r_sum = review_sub.add_parser("summary", help="Show review queue statistics summary")
+    r_sum.add_argument("account", help="Account identifier")
+    r_sum.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
 
     args = parser.parse_args()
 
@@ -552,6 +719,171 @@ def main() -> int:
         print(f"Created:      {session.created_at}")
         print(f"Updated:      {session.updated_at}")
         return 0
+
+    if args.command == "review":
+        import json
+        ws = WorkspaceManager()
+        if not ws.session_exists(args.account):
+            print(f"Error: No session found for account '{args.account}'", file=sys.stderr)
+            return 1
+
+        pipeline = AutoCutPipeline()
+        service = pipeline.get_review_service(args.account)
+
+        action = getattr(args, "review_action", None)
+        if not action or action == "build":
+            session = pipeline.build_review_queue(args.account)
+            print(f"[+] Review queue built for '{args.account}'. Total items: {len(session.review_items)}")
+            summary = service.get_summary()
+            print(f"    Open: {summary['open']} (P0={summary['open_by_priority']['P0']}, P1={summary['open_by_priority']['P1']}, P2={summary['open_by_priority']['P2']}, P3={summary['open_by_priority']['P3']})")
+            print(f"    Resolved Manual: {summary['resolved_manual']}")
+            return 0
+
+        if action == "list":
+            items = service.list_items(status=args.status, priority=args.priority, subsystem=args.subsystem)
+            if getattr(args, "json_output", False):
+                print(json.dumps([it.to_dict() for it in items], indent=2))
+                return 0
+            print(f"Review Items for '{args.account}' ({len(items)} items):\n")
+            print(f"{'IDX':<4} {'PRIO':<5} {'SUBSYSTEM':<15} {'STATUS':<15} {'REASON':<28} {'ID':<35}")
+            print("-" * 110)
+            for it in items:
+                print(f"{it.order_index:<4} {it.priority:<5} {it.subsystem:<15} {it.status:<15} {it.reason:<28} {it.id:<35}")
+            return 0
+
+        if action == "show":
+            item = service.get_item(args.item_id)
+            if item is None:
+                print(f"Error: Review item '{args.item_id}' not found", file=sys.stderr)
+                return 1
+            if getattr(args, "json_output", False):
+                print(json.dumps(item.to_dict(), indent=2))
+                return 0
+            print(f"ID:        {item.id}")
+            print(f"Subsystem: {item.subsystem}")
+            print(f"Status:    {item.status}")
+            print(f"Priority:  {item.priority}")
+            print(f"Reason:    {item.reason}")
+            print(f"Message:   {item.message}")
+            if item.source_id:
+                print(f"Source ID: {item.source_id}")
+            if item.asset_id:
+                print(f"Asset ID:  {item.asset_id}")
+            if item.field_name:
+                print(f"Field:     {item.field_name}")
+            print(f"Machine:   {item.machine_value} (conf={item.confidence:.2f})")
+            if item.resolution:
+                print(f"Resolved:  action={item.resolution.action}, by={item.resolution.resolved_by}, val={item.resolution.value}")
+            return 0
+
+        if action == "accept":
+            try:
+                res = service.accept_machine_value(args.item_id, notes=args.notes)
+                print(f"[+] Accepted machine value for '{args.item_id}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "set-category":
+            try:
+                res = service.set_category(args.source_id, args.category, notes=args.notes)
+                print(f"[+] Overrode category for source '{args.source_id}' to '{args.category}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "set-level":
+            try:
+                res = service.set_level(args.asset_id, args.level, notes=args.notes)
+                print(f"[+] Set level for asset '{args.asset_id}' to {args.level}. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "set-name":
+            try:
+                res = service.set_name(args.asset_id, args.name, notes=args.notes)
+                print(f"[+] Set name for asset '{args.asset_id}' to '{args.name}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "set-counter":
+            try:
+                res = service.set_counter(args.asset_id, args.counter, notes=args.notes)
+                print(f"[+] Set counter for asset '{args.asset_id}' to '{args.counter}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "clear-counter":
+            try:
+                res = service.clear_counter(args.asset_id, notes=args.notes)
+                print(f"[+] Cleared counter for asset '{args.asset_id}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "set-uid":
+            try:
+                res = service.set_uid(args.uid, notes=args.notes)
+                print(f"[+] Set UID to '{args.uid}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "reject":
+            try:
+                res = service.reject_item(args.item_id, notes=args.notes)
+                print(f"[+] Rejected item '{args.item_id}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "skip":
+            try:
+                res = service.skip_item(args.item_id, notes=args.notes)
+                print(f"[+] Skipped item '{args.item_id}'. Status: {res.status}")
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+
+        if action == "history":
+            history = service.session.review_history
+            if getattr(args, "json_output", False):
+                print(json.dumps([h.to_dict() for h in history], indent=2))
+                return 0
+            print(f"Audit Trail for '{args.account}' ({len(history)} entries):\n")
+            for h in history:
+                print(f"[{h.timestamp}] {h.action:<15} item={h.review_item_id} old={h.old_value} new={h.new_value} notes={h.notes or ''}")
+            return 0
+
+        if action == "summary":
+            summary = service.get_summary()
+            if getattr(args, "json_output", False):
+                print(json.dumps(summary, indent=2))
+                return 0
+            print(f"Review Summary for '{args.account}':")
+            print(f"Total:            {summary['total']}")
+            print(f"Open:             {summary['open']}")
+            print(f"  P0:             {summary['open_by_priority']['P0']}")
+            print(f"  P1:             {summary['open_by_priority']['P1']}")
+            print(f"  P2:             {summary['open_by_priority']['P2']}")
+            print(f"  P3:             {summary['open_by_priority']['P3']}")
+            print(f"Resolved Manual:  {summary['resolved_manual']}")
+            print(f"Resolved Auto:    {summary['resolved_auto']}")
+            print(f"Rejected:         {summary['rejected']}")
+            print(f"Skipped:          {summary['skipped']}")
+            return 0
 
     parser.print_help()
     return 0

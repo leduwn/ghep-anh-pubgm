@@ -21,6 +21,7 @@ ROUTER_VERSION = "1.1.0"
 MISC_GRID_VERSION = "2.1.0"
 OCR_VERSION = "2.0.0"
 LAYOUT_VERSION = "1.0.0"
+REVIEW_ENGINE_VERSION = "1.0.0"
 
 # Default paths
 DEFAULT_ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -93,6 +94,69 @@ class DetectionStatus(str, Enum):
     REVIEW = "REVIEW"
     ERROR = "ERROR"
     DEFERRED = "DEFERRED"
+
+
+class ReviewSubsystem(str, Enum):
+    """Subsystems that can generate review items."""
+    CLASSIFICATION = "CLASSIFICATION"
+    DETECTION = "DETECTION"
+    ASSET_QUALITY = "ASSET_QUALITY"
+    OCR_GUN = "OCR_GUN"
+    UID = "UID"
+
+
+class ReviewStatus(str, Enum):
+    """Workflow status for a review item."""
+    OPEN = "OPEN"
+    RESOLVED_AUTO = "RESOLVED_AUTO"
+    RESOLVED_MANUAL = "RESOLVED_MANUAL"
+    REJECTED = "REJECTED"
+    SKIPPED = "SKIPPED"
+    STALE = "STALE"
+
+
+class ReviewPriority(str, Enum):
+    """Deterministic priority levels for review triage."""
+    P0 = "P0"  # Pipeline error / unhandled crash
+    P1 = "P1"  # UID conflict / unknown classification
+    P2 = "P2"  # Semantic fallback / OCR required field uncertain / classification review
+    P3 = "P3"  # Asset quality / partial / empty suspected / low confidence non-critical
+
+
+class ReviewReason(str, Enum):
+    """Structured machine reason codes for review items."""
+    # Classification
+    CLASSIFICATION_LOW_CONFIDENCE = "classification_low_confidence"
+    CLASSIFICATION_AMBIGUOUS = "classification_ambiguous"
+    CLASSIFICATION_UNKNOWN = "classification_unknown"
+    CLASSIFICATION_ERROR = "classification_error"
+
+    # Detection
+    SPECIALIZED_DETECTOR_LOW_CONFIDENCE = "specialized_detector_low_confidence"
+    GENERIC_FALLBACK_SELECTED = "generic_fallback_selected"
+    SEMANTIC_FALLBACK = "semantic_fallback"
+    NO_GRID = "no_grid"
+    DETECTION_REVIEW = "detection_review"
+
+    # Asset Quality
+    PARTIAL_ASSET = "partial_asset"
+    LOCKED_ASSET = "locked_asset"
+    EMPTY_SUSPECTED = "empty_suspected"
+    QUALITY_REVIEW = "quality_review"
+
+    # OCR
+    OCR_LEVEL_LOW_CONFIDENCE = "ocr_level_low_confidence"
+    OCR_NAME_LOW_CONFIDENCE = "ocr_name_low_confidence"
+    OCR_COUNTER_UNCERTAIN = "ocr_counter_uncertain"
+    OCR_REVIEW = "ocr_review"
+
+    # UID
+    UID_LOW_CONFIDENCE = "uid_low_confidence"
+    UID_CONFLICT = "uid_conflict"
+    UID_MISSING_LABEL = "uid_missing_label"
+
+    # Pipeline
+    PIPELINE_ERROR = "pipeline_error"
 
 
 # Threshold Defaults

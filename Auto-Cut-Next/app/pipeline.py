@@ -808,5 +808,43 @@ class AutoCutPipeline:
         )
         return session
 
+    def build_review_queue(self, account_id: str) -> AccountSession:
+        """Builds and persists the unified review queue for the session."""
+        session = self.workspace.load_session(account_id)
+        from core.constants import ReviewStatus
+        from review.review_builder import ReviewQueueBuilder
+
+        builder = ReviewQueueBuilder(
+            ocr_accept_threshold=self.settings.ocr_confidence_threshold,
+            detector_confidence_threshold=self.settings.detector_confidence_threshold,
+        )
+        with self.metrics.timer("review"):
+            items = builder.build_queue(session)
+
+        self.metrics.review_items_generated = len(items)
+        self.metrics.review_items_open = sum(1 for it in items if it.is_open)
+        self.metrics.review_items_resolved_manual = sum(
+            1 for it in items if it.status == ReviewStatus.RESOLVED_MANUAL.value
+        )
+        self.metrics.review_items_resolved_machine_accept = sum(
+            1 for it in items if it.resolution and it.resolution.action == "accept_machine"
+        )
+        self.workspace.save_session(session)
+        self.logger.info(
+            f"Review queue built: total={len(items)} open={self.metrics.review_items_open} "
+            f"resolved_manual={self.metrics.review_items_resolved_manual}",
+            stage=Stage.REVIEW,
+            account=account_id,
+            status="SUCCESS",
+        )
+        return session
+
+    def get_review_service(self, account_id: str):
+        """Instantiates a ReviewService for manual resolution workflows."""
+        from review.review_service import ReviewService
+        session = self.workspace.load_session(account_id)
+        return ReviewService(session=session, workspace=self.workspace, pipeline=self)
+
+
 
 
