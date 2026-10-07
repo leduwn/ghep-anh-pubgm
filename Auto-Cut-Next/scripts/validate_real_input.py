@@ -44,7 +44,7 @@ def find_supported_images(input_dir: Path) -> list[Path]:
     return sorted(images, key=lambda p: p.name)
 
 
-def validate_real_fixtures(input_path_str: str) -> dict[str, Any]:
+def validate_real_fixtures(input_path_str: str, fresh: bool = False) -> dict[str, Any]:
     """Runs ingestion, classification, and detection against real screenshots."""
     # Resolve input directory
     input_dir = Path(input_path_str).resolve()
@@ -63,6 +63,14 @@ def validate_real_fixtures(input_path_str: str) -> dict[str, Any]:
 
     # Set up isolated workspace under Auto-Cut-Next/workspace/real_fixture_validation
     out_dir = NEXT_ROOT / "workspace" / "real_fixture_validation"
+    if fresh and out_dir.exists():
+        import shutil
+        print(f"Purging workspace: {out_dir}")
+        for item in out_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     ws = WorkspaceManager(out_dir)
@@ -221,5 +229,9 @@ def validate_real_fixtures(input_path_str: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    target_dir = sys.argv[1] if len(sys.argv) > 1 else "Cắt/input"
-    validate_real_fixtures(target_dir)
+    import argparse
+    parser = argparse.ArgumentParser(description="Validate real PUBG fixtures")
+    parser.add_argument("input_dir", nargs="?", default="Cắt/input", help="Path to input directory")
+    parser.add_argument("--fresh", action="store_true", help="Purge only real_fixture_validation workspace")
+    args = parser.parse_args()
+    validate_real_fixtures(args.input_dir, fresh=args.fresh)
