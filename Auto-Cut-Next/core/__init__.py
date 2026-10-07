@@ -44,6 +44,7 @@ from .cache import LRUCache, DiskCache, CacheKeyGenerator
 from .metrics import MetricsCollector
 from .ingest import ImageIngestor
 from .session import WorkspaceManager
+from .serialization import to_json_native
 
 __all__ = [
     "APP_NAME",
@@ -86,4 +87,5 @@ __all__ = [
     "MetricsCollector",
     "ImageIngestor",
     "WorkspaceManager",
+    "to_json_native",
 ]

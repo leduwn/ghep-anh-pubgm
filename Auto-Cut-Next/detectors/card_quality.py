@@ -68,8 +68,14 @@ def compute_lock_score(tile_bgr: np.ndarray) -> tuple[float, dict[str, Any]]:
         score = iou * precision
 
         if score > best_score:
-            best_score = score
-            best_stats = {"w": w, "h": h, "area": area, "iou": iou, "precision": precision}
+            best_score = float(score)
+            best_stats = {
+                "w": int(w),
+                "h": int(h),
+                "area": int(area),
+                "iou": round(float(iou), 4),
+                "precision": round(float(precision), 4),
+            }
 
     return best_score, best_stats
 

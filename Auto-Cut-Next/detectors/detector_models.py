@@ -9,6 +9,7 @@ from typing import Any, Optional
 from core.constants import DetectionStatus, MISC_GRID_VERSION
 from core.models import Rect
 from core.detection_state import SourceDetectionResult
+from core.serialization import to_json_native
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ class CardCandidate:
             "confidence": round(self.confidence, 4),
             "review_required": self.review_required,
             "rejection_reasons": list(self.rejection_reasons),
-            "diagnostics": dict(self.diagnostics),
+            "diagnostics": to_json_native(self.diagnostics),
         }
 
     @classmethod
@@ -134,12 +135,12 @@ class SpecializedDetectionResult:
             "confidence": round(self.confidence, 4),
             "candidates": [c.to_dict() for c in self.candidates],
             "reasons": list(self.reasons),
-            "diagnostics": dict(self.diagnostics),
+            "diagnostics": to_json_native(self.diagnostics),
             "fallback_recommended": self.fallback_recommended,
             "detector_name": self.detector_name,
             "detector_version": self.detector_version,
             "duration_ms": round(self.duration_ms, 2),
-            "metadata": dict(self.metadata),
+            "metadata": to_json_native(self.metadata),
         }
 
     @classmethod

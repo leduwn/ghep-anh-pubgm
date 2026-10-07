@@ -14,6 +14,7 @@ from .exceptions import (
     SessionIncompatibleError,
 )
 from .models import AccountSession
+from .serialization import to_json_native
 
 ACCOUNT_ID_SAFE_REGEX = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
@@ -68,7 +69,7 @@ class WorkspaceManager:
         temp_path = session_path.with_suffix(".tmp")
 
         session.touch()
-        data = session.to_dict()
+        data = to_json_native(session.to_dict())
 
         try:
             with open(temp_path, "w", encoding="utf-8") as f:

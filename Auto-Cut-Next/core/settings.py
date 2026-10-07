@@ -34,6 +34,7 @@ from .constants import (
     MAX_ROWS,
 )
 from .exceptions import ConfigurationError
+from .serialization import to_json_native
 
 
 @dataclass
@@ -227,7 +228,7 @@ class AutoCutSettings:
         temp_path = path.with_suffix(".tmp")
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+                json.dump(to_json_native(self.to_dict()), f, indent=2, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, path)

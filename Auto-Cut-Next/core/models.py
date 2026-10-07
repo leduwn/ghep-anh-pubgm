@@ -22,6 +22,7 @@ from .constants import (
 )
 from .detection_state import SourceDetectionResult
 from .exceptions import SessionCorruptError
+from .serialization import to_json_native
 
 
 def _utc_now_iso() -> str:
@@ -163,7 +164,7 @@ class ClassificationResult:
             self.decision = Decision.AUTO_ACCEPT.value
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return to_json_native(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ClassificationResult":
@@ -230,7 +231,7 @@ class GunMetadata:
         return self.counter_present and bool(self.effective_counter)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return to_json_native(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GunMetadata":
@@ -266,7 +267,7 @@ class VehicleMetadata:
     manual_order: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return to_json_native(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VehicleMetadata":
@@ -287,7 +288,7 @@ class OutfitMetadata:
     label: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return to_json_native(asdict(self))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "OutfitMetadata":
@@ -336,7 +337,9 @@ class DetectedAsset:
             result["raw_crop_rect"] = self.raw_crop_rect.to_dict()
         if self.gun_metadata is not None:
             result["gun_metadata"] = self.gun_metadata.to_dict()
-        return result
+        result["metadata"] = to_json_native(self.metadata)
+        result["quality_scores"] = to_json_native(self.quality_scores)
+        return to_json_native(result)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DetectedAsset":
@@ -609,7 +612,7 @@ class AccountSession:
         self.touch()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        raw = {
             "version": self.version,
             "account_id": self.account_id,
             "created_at": self.created_at,
@@ -628,6 +631,7 @@ class AccountSession:
             "detector_versions": self.detector_versions,
             "ocr_version": self.ocr_version,
         }
+        return to_json_native(raw)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AccountSession":

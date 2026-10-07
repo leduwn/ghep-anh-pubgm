@@ -29,6 +29,7 @@ from core.constants import Category, Decision, DetectionStatus
 from core.ingest import read_image_cv2
 from core.models import Rect
 from core.session import WorkspaceManager
+from core.serialization import to_json_native
 from app.pipeline import AutoCutPipeline
 from ocr.gun_ocr import resolve_gun_rois
 
@@ -200,7 +201,7 @@ def validate_real_fixtures(input_path_str: str) -> dict[str, Any]:
     # Save machine-readable JSON
     report_json_path = out_dir / "report.json"
     with open(report_json_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+        json.dump(to_json_native(report), f, indent=2)
 
     print("\n" + "=" * 80)
     print("SUMMARY REPORT")

@@ -13,6 +13,7 @@ from typing import Any, Generic, Optional, TypeVar, Union
 from .exceptions import CacheError
 from .models import Rect
 from .constants import DEFAULT_LRU_CACHE_CAPACITY
+from .serialization import to_json_native
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -137,10 +138,11 @@ class DiskCache:
     def put(self, key: str, data: dict[str, Any]) -> None:
         target = self._path_for_key(key)
         temp_file = target.with_suffix(".tmp")
+        normalized_data = to_json_native(data)
         with self._lock:
             try:
                 with open(temp_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    json.dump(normalized_data, f, indent=2, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(temp_file, target)
@@ -151,6 +153,10 @@ class DiskCache:
                     except OSError:
                         pass
                 raise CacheError(f"Failed to atomically write cache key '{key}': {exc}") from exc
+
+    def set(self, key: str, data: dict[str, Any]) -> None:
+        """Alias for put() to satisfy key-value cache contracts."""
+        self.put(key, data)
 
     def delete(self, key: str) -> bool:
         target = self._path_for_key(key)
