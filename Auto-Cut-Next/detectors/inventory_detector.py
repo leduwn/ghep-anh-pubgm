@@ -61,8 +61,6 @@ class InventoryDetector:
             allow_single=True,
         )
 
-        raw_rects = self.grid_detector.discover_candidates(context, profile)
-
         roi_rect = Rect(
             int(round(scan_w * self.ROI_X_MIN_RATIO)),
             int(round(scan_h * self.ROI_Y_MIN_RATIO)),
@@ -70,6 +68,7 @@ class InventoryDetector:
             int(round(scan_h * (self.ROI_Y_MAX_RATIO - self.ROI_Y_MIN_RATIO))),
         )
 
+        raw_rects = self.grid_detector.discover_candidates(context, profile, search_roi=roi_rect)
         in_roi = [r for r in raw_rects if (roi_rect.intersection(r) is not None and roi_rect.intersection(r).area >= 0.50 * r.area)]
         ordered_grid = self.grid_detector.reconstruct_grid(in_roi, profile, scan_w, scan_h)
 

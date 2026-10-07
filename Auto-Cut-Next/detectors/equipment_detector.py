@@ -63,9 +63,6 @@ class EquipmentDetector:
             allow_single=True,
         )
 
-        # Candidate discovery within the constrained ROI
-        raw_rects = self.grid_detector.discover_candidates(context, profile)
-
         # Filter strictly within the equipment inventory ROI
         roi_rect = Rect(
             int(round(scan_w * x_min_ratio)),
@@ -74,6 +71,8 @@ class EquipmentDetector:
             int(round(scan_h * (y_max_ratio - y_min_ratio))),
         )
 
+        # Candidate discovery within the constrained ROI
+        raw_rects = self.grid_detector.discover_candidates(context, profile, search_roi=roi_rect)
         in_roi = [r for r in raw_rects if (roi_rect.intersection(r) is not None and roi_rect.intersection(r).area >= 0.50 * r.area)]
 
         ordered_grid = self.grid_detector.reconstruct_grid(in_roi, profile, scan_w, scan_h)

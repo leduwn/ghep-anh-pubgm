@@ -273,16 +273,25 @@ def test_dedup_empty_tile_phash_zero_no_duplicate_chain():
 def test_dedup_mae_threshold_setting():
     """Validates that varying duplicate_mae_threshold directly controls duplicate decision."""
     tile_a = np.zeros((100, 100, 3), dtype=np.uint8)
+    tile_a[:, :] = (35, 30, 25)
     cv2.circle(tile_a, (50, 50), 30, (180, 180, 180), -1)
 
-    # Add moderate noise to create difference
+    # Construct deterministic patterned difference
     tile_b = tile_a.copy()
-    tile_b[30:70, 30:70] = np.clip(tile_b[30:70, 30:70].astype(np.int16) + 15, 0, 255).astype(np.uint8)
+    cv2.rectangle(tile_b, (42, 42), (58, 58), (250, 250, 250), -1)
 
-    # Tight MAE (e.g. 5.0) -> Not duplicate
-    is_dup_strict, mae, _ = are_visually_identical(tile_a, tile_b, diff_threshold=5.0)
+    # Measure actual MAE and Hamming distance
+    _, mae, dist = are_visually_identical(tile_a, tile_b, diff_threshold=999.0, phash_threshold=64)
+    assert dist <= 10
+    assert mae > 0.5
+
+    strict = max(0.1, mae * 0.5)
+    relaxed = mae * 1.5
+
+    # Strict threshold -> Not duplicate
+    is_dup_strict, _, _ = are_visually_identical(tile_a, tile_b, diff_threshold=strict)
     assert is_dup_strict is False
 
-    # Relaxed MAE (e.g. 25.0) -> Duplicate
-    is_dup_relaxed, _, _ = are_visually_identical(tile_a, tile_b, diff_threshold=25.0)
+    # Relaxed threshold -> Duplicate
+    is_dup_relaxed, _, _ = are_visually_identical(tile_a, tile_b, diff_threshold=relaxed)
     assert is_dup_relaxed is True

@@ -79,7 +79,7 @@ def test_pipeline_detect_category_gating_and_deferred(temp_workspace, tmp_path):
     temp_workspace.save_session(session)
 
     # Run detection
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     # Verify Gun is routed with GunDetector primary and fallback executed on generic grid
     assert gun_src_id in session.detections
@@ -163,7 +163,7 @@ def test_pipeline_detect_cross_source_deduplication(temp_workspace, tmp_path):
         )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     # 4 total assets, 2 canonical and 2 duplicates
     assert len(session.assets) == 4
@@ -196,7 +196,7 @@ def test_pipeline_detect_review_classification_propagates_review(temp_workspace,
     )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     # Resulting assets must have review_required=True
     assert len(session.assets) >= 2
@@ -224,7 +224,7 @@ def test_pipeline_detect_unknown_classification_skipped(temp_workspace, tmp_path
     )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     # Unknown source must not be processed by detector
     assert src_id not in session.detections
@@ -251,7 +251,7 @@ def test_pipeline_detect_stale_classifier_version(temp_workspace, tmp_path):
     )
     temp_workspace.save_session(session)
 
-    pipeline.detect_session(account_id)
+    session = pipeline.detect_session(account_id)
 
     assert src_id in session.detections
     det = session.detections[src_id]
@@ -280,7 +280,7 @@ def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
-    pipeline.detect_session(account_id, force=True)
+    session = pipeline.detect_session(account_id, force=True)
 
     assert len(session.assets) == 2
     assert all(a.detector == "inventory_grid_detector" for a in session.assets)
@@ -293,7 +293,7 @@ def test_pipeline_route_switch_asset_invalidation(temp_workspace, tmp_path):
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
-    pipeline.detect_session(account_id, force=True)
+    session = pipeline.detect_session(account_id, force=True)
 
     # Must NOT accumulate: still exactly 2 assets, all from equipment_grid_detector
     assert len(session.assets) == 2
@@ -321,7 +321,7 @@ def test_pipeline_gating_unknown_error_other(temp_workspace, tmp_path):
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
-    pipeline.detect_session(account_id, force=True)
+    session = pipeline.detect_session(account_id, force=True)
     assert len(session.assets) == 2
 
     # Now reclassify to Category.OTHER
@@ -332,7 +332,7 @@ def test_pipeline_gating_unknown_error_other(temp_workspace, tmp_path):
         detector_version=CLASSIFIER_VERSION,
     )
     temp_workspace.save_session(session)
-    pipeline.detect_session(account_id, force=True)
+    session = pipeline.detect_session(account_id, force=True)
 
     # Assets and detection state must be invalidated and 0 remaining
     assert len(session.assets) == 0

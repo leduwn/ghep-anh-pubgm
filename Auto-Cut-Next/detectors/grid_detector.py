@@ -8,6 +8,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from core.constants import MISC_GRID_VERSION
 from core.models import Rect
 from .detection_context import DetectionContext
 from .detector_models import CardGeometryProfile, CardCandidate, GridDetectionResult
@@ -16,6 +17,9 @@ from .card_quality import CardQualityEvaluator
 
 class GenericGridDetector:
     """Detects inventory tile grids and individual cards using morphological contrast extraction."""
+
+    NAME = "generic_grid_detector"
+    VERSION = MISC_GRID_VERSION
 
     def __init__(
         self,
@@ -29,31 +33,61 @@ class GenericGridDetector:
         self,
         context: DetectionContext,
         profile: CardGeometryProfile,
+        search_roi: Optional[Rect] = None,
     ) -> list[Rect]:
-        """Discovers rectangular candidate card components using dark contrast morphology."""
-        scan = context.scan_bgr
-        h, w = context.scan_h, context.scan_w
+        """Discovers rectangular candidate card components using contrast morphology."""
+        scan_full = context.scan_bgr
+        full_h, full_w = context.scan_h, context.scan_w
+        if full_h < 20 or full_w < 20:
+            return []
+
+        if search_roi is not None:
+            roi_x = max(0, min(full_w - 1, int(search_roi.x)))
+            roi_y = max(0, min(full_h - 1, int(search_roi.y)))
+            roi_w = max(1, min(full_w - roi_x, int(search_roi.w)))
+            roi_h = max(1, min(full_h - roi_y, int(search_roi.h)))
+            scan = scan_full[roi_y : roi_y + roi_h, roi_x : roi_x + roi_w]
+        else:
+            roi_x, roi_y = 0, 0
+            scan = scan_full
+
+        h, w = scan.shape[:2]
         if h < 20 or w < 20:
             return []
 
-        # Dark contrast mask (inventory tiles typically have dark/contrasting background)
-        min_c = np.min(scan, axis=2)
-        max_c = np.max(scan, axis=2)
-        spread = max_c.astype(np.int16) - min_c.astype(np.int16)
-        dark = (min_c < 100) & ((max_c < 150) | (spread > 40))
+        gray = cv2.cvtColor(scan, cv2.COLOR_BGR2GRAY)
+        med_val = float(np.median(gray))
 
-        # Morphological closing to seal card boundaries and bridge interior gaps
-        dark_u8 = (dark.astype(np.uint8)) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        closed = cv2.morphologyEx(dark_u8, cv2.MORPH_CLOSE, kernel)
+        # Scaled odd kernel for morphology to protect thin borders
+        k_size = 3
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
+
+        if med_val > 110:
+            # Light background -> cards are dark/contrasting tiles
+            min_c = np.min(scan, axis=2)
+            max_c = np.max(scan, axis=2)
+            spread = max_c.astype(np.int16) - min_c.astype(np.int16)
+            dark = (min_c < 100) & ((max_c < 150) | (spread > 40))
+            dark_u8 = (dark.astype(np.uint8)) * 255
+            closed = cv2.morphologyEx(dark_u8, cv2.MORPH_CLOSE, kernel)
+        else:
+            # Dark background -> cards, fills, and/or borders are brighter than background
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+            # Fill external contours so hollow borders become solid candidate regions
+            contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            filled = np.zeros_like(closed)
+            for cnt in contours:
+                cv2.drawContours(filled, [cnt], -1, 255, -1)
+            closed = filled
 
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
         candidates: list[Rect] = []
 
-        min_w = w * profile.relative_width_min
-        max_w = w * profile.relative_width_max
-        min_h = h * profile.relative_height_min
-        max_h = h * profile.relative_height_max
+        min_w = full_w * profile.relative_width_min
+        max_w = full_w * profile.relative_width_max
+        min_h = full_h * profile.relative_height_min
+        max_h = full_h * profile.relative_height_max
 
         for idx in range(1, num_labels):
             x, y, cw, ch, area = stats[idx]
@@ -69,7 +103,7 @@ class GenericGridDetector:
             if fill_ratio < 0.60:
                 continue
 
-            candidates.append(Rect(x, y, cw, ch))
+            candidates.append(Rect(x + roi_x, y + roi_y, cw, ch))
 
         return candidates
 

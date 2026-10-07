@@ -202,12 +202,32 @@ class ImageClassifier:
         ]
         has_dark_workshop = (
             center_roi.size > 0
-            and float(np.mean(cv2.cvtColor(center_roi, cv2.COLOR_BGR2GRAY))) < 92.0
+            and float(np.mean(cv2.cvtColor(center_roi, cv2.COLOR_BGR2GRAY))) < 140.0
         )
 
-        # Một số màn Xưởng không có nút vàng ở dưới; bộ ba dấu hiệu này ổn định
-        # hơn và chặn chúng trước khi chạy nhận diện bảng chi tiết Trang Phục.
-        return has_xuong_txt and has_daco and has_dark_workshop
+        # Nút vàng Nâng Cấp ở góc dưới trái (y: 1100..1260, x: 50..550)
+        roi_btn = img[int(1100 * scale_y):int(1260 * scale_y), int(50 * scale_x):int(550 * scale_x)]
+        has_yellow_btn = False
+        if roi_btn.size > 0:
+            hsv_btn = cv2.cvtColor(roi_btn, cv2.COLOR_BGR2HSV)
+            yellow = cv2.inRange(hsv_btn, np.array([12, 100, 100]), np.array([38, 255, 255]))
+            has_yellow_btn = np.sum(yellow > 0) > int(300 * (scale_x * scale_y))
+
+        # Một số màn Xưởng không có nút vàng ở dưới (đã max cấp); hoặc hiệu ứng
+        # súng phát sáng mạnh (như Thiên Mã - P90) đẩy độ sáng trung bình lên cao.
+        return has_xuong_txt and has_daco and (has_dark_workshop or has_yellow_btn)
+
+    @staticmethod
+    def is_appearance_screen(img: np.ndarray) -> bool:
+        """Nhận diện màn hình Ngoại hình (Kiểu tóc / Khuôn mặt)."""
+        if img is None or img.size == 0 or img.shape[1] < img.shape[0] * 1.7:
+            return False
+        if catitem:
+            try:
+                return catitem.HairstyleFilter.is_hair_screen(img)
+            except Exception:
+                pass
+        return False
 
     @staticmethod
     def _find_blue_indicator_y(
@@ -750,6 +770,10 @@ class ImageClassifier:
         # 1. XƯỞNG NÂNG CẤP SÚNG
         if ImageClassifier.is_gun_lab_screen(img):
             return "SUNG"
+
+        # 1.5. MÀN HÌNH NGOẠI HÌNH (KIỂU TÓC / KHUÔN MẶT) -> ITEM
+        if ImageClassifier.is_appearance_screen(img):
+            return "ITEM"
 
         # 2. PHÂN TÍCH VẠCH XANH TRÊN THANH TAB DỌC NGOÀI CÙNG (X: 2530..2600)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)

@@ -393,17 +393,28 @@ def test_dedup_category_profiles_structure():
 
 def test_dedup_evaluates_with_category_profile():
     """AccountDeduplicator applies category-specific diff and phash thresholds."""
-    dedup = AccountDeduplicator()
+    tile1 = np.zeros((100, 100, 3), dtype=np.uint8)
+    tile1[:, :] = (35, 30, 25)
+    cv2.circle(tile1, (50, 50), 30, (180, 180, 180), -1)
 
-    tile1 = np.full((100, 100, 3), 100, dtype=np.uint8)
-    tile2 = np.full((100, 100, 3), 108, dtype=np.uint8)  # MAE = 8.0
+    tile2 = tile1.copy()
+    cv2.rectangle(tile2, (38, 38), (62, 62), (250, 250, 250), -1)
 
-    # For GUN (threshold 6.0), MAE=8.0 is NOT identical
-    is_gun_dup, _ = dedup.are_visually_identical(tile1, tile2, category="GUN")
+    _, mae, dist = are_visually_identical(tile1, tile2, diff_threshold=999.0, phash_threshold=64)
+    assert mae > 0.5
+
+    custom_profiles = {
+        "GUN": DedupProfile(name="GUN", diff_threshold=mae * 0.7, phash_threshold=max(dist + 2, 10)),
+        "VEHICLE": DedupProfile(name="VEHICLE", diff_threshold=mae * 1.4, phash_threshold=max(dist + 2, 10)),
+    }
+    dedup = AccountDeduplicator(category_profiles=custom_profiles)
+
+    # For GUN (strict threshold), MAE > threshold -> NOT identical
+    is_gun_dup, *_ = dedup.are_visually_identical(tile1, tile2, category="GUN")
     assert is_gun_dup is False
 
-    # For VEHICLE (threshold 10.0), MAE=8.0 IS identical
-    is_veh_dup, _ = dedup.are_visually_identical(tile1, tile2, category="VEHICLE")
+    # For VEHICLE (relaxed threshold), MAE < threshold -> IS identical
+    is_veh_dup, *_ = dedup.are_visually_identical(tile1, tile2, category="VEHICLE")
     assert is_veh_dup is True
 
 

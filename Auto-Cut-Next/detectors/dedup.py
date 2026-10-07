@@ -172,6 +172,26 @@ class AccountDeduplicator:
             diff_threshold=self.diff_threshold,
         )
 
+    def are_visually_identical(
+        self,
+        tile_a: np.ndarray,
+        tile_b: np.ndarray,
+        category: str = "MISC",
+        hash_a: Optional[int] = None,
+        hash_b: Optional[int] = None,
+    ) -> tuple[bool, float, int]:
+        """Category-profile aware duplicate check delegating to are_visually_identical."""
+        prof = self.get_profile(category)
+        return are_visually_identical(
+            tile_a,
+            tile_b,
+            hash_a=hash_a,
+            hash_b=hash_b,
+            diff_threshold=prof.diff_threshold,
+            phash_threshold=prof.phash_threshold,
+            crop_box_ratio=prof.crop_box_ratio,
+        )
+
     def deduplicate_session_assets(
         self,
         assets: list[DetectedAsset],

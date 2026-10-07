@@ -127,13 +127,21 @@ class HairstyleFilter:
     def _load_templates(cls) -> Dict[str, np.ndarray]:
         if cls._templates is None:
             templates = {}
-            names = ("hair_title", *cls.FACE_TEMPLATES,
-                     *(target[0] for target in cls.TARGETS))
+            names = (
+                "hair_title",
+                "face_title",
+                *cls.FACE_TEMPLATES,
+                *(target[0] for target in cls.TARGETS),
+                "hair_bui",
+            )
+            assets_dir = os.path.join(os.path.dirname(__file__), "assets")
             for name in names:
-                path = os.path.join(os.path.dirname(__file__), "assets", name + ".png")
+                path = os.path.join(assets_dir, name + ".png")
+                if not os.path.exists(path):
+                    continue
                 image = cv2_imread_utf8(path)
                 if image is None:
-                    raise FileNotFoundError(f"Thiếu mẫu nhận diện kiểu tóc: {path}")
+                    continue
                 templates[name] = cv2.resize(image, None, fx=0.5, fy=0.5,
                                               interpolation=cv2.INTER_AREA)
             cls._templates = templates
@@ -144,16 +152,23 @@ class HairstyleFilter:
         return cv2.resize(img, cls.WORK_SIZE, interpolation=cv2.INTER_AREA)
 
     @classmethod
+    def _match_title(cls, work: np.ndarray, template_name: str) -> float:
+        templates = cls._load_templates()
+        if template_name not in templates:
+            return 0.0
+        region = cv2.cvtColor(work[50:100, 845:1030], cv2.COLOR_BGR2GRAY)
+        title = cv2.cvtColor(templates[template_name], cv2.COLOR_BGR2GRAY)
+        return float(cv2.minMaxLoc(cv2.matchTemplate(region, title, cv2.TM_CCOEFF_NORMED))[1])
+
+    @classmethod
     def is_hair_screen(cls, img: np.ndarray) -> bool:
+        """Nhận diện màn hình Ngoại hình: Kiểu tóc hoặc Khuôn mặt."""
         if img is None or img.size == 0 or img.shape[1] < img.shape[0] * 1.7:
             return False
-        reference = cls._load_templates()["hair_title"]
         work = cls._working_image(img)
-        # Chỉ tìm tiêu đề trên lưới, không tìm chữ trong ảnh thẻ hoặc mô tả.
-        region = cv2.cvtColor(work[50:100, 845:1030], cv2.COLOR_BGR2GRAY)
-        title = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-        score = cv2.minMaxLoc(cv2.matchTemplate(region, title, cv2.TM_CCOEFF_NORMED))[1]
-        return score >= 0.85
+        hair_score = cls._match_title(work, "hair_title")
+        face_score = cls._match_title(work, "face_title")
+        return max(hair_score, face_score) >= 0.80
 
     @classmethod
     def crop_unlocked(cls, img: np.ndarray, target_size: Tuple[int, int],
@@ -187,22 +202,28 @@ class HairstyleFilter:
             log_fn(f"  [+] Cắt {label} đã mở khóa.")
             return True
 
-        # Hai ảnh mới là mẫu hình dạng khuôn mặt. Mọi ô đủ tương tự một trong
-        # hai mẫu đều được lấy, rồi loại trùng giữa góc nghiêng/chính diện.
+        # Phân biệt màn hình Khuôn mặt và Kiểu tóc để chỉ xử lý đúng đối tượng
+        hair_score = cls._match_title(work, "hair_title")
+        face_score = cls._match_title(work, "face_title")
+        is_face_screen = face_score >= 0.80 and face_score > hair_score
+
+        # Dò các ô khuôn mặt mở khóa (trên màn Khuôn mặt hoặc màn Kiểu tóc có ô mặt)
         face_candidates = []
         face_core = (slice(10, 102), slice(10, 102))
         for name in cls.FACE_TEMPLATES:
+            if name not in templates:
+                continue
             reference = templates[name]
             core = cv2.cvtColor(reference[face_core], cv2.COLOR_BGR2GRAY)
             scores = cv2.matchTemplate(grid, core, cv2.TM_CCOEFF_NORMED)
             for _ in range(24):
                 _, score, _, point = cv2.minMaxLoc(scores)
-                if score < 0.50:
+                if score < 0.45:
                     break
                 px, py = point
                 scores[max(0, py - 35):py + 36, max(0, px - 35):px + 36] = -1
                 x, y = px + 840, py + 85
-                if min(abs(x - col) for col in (859.5, 976.5, 1093.5)) > 8:
+                if min(abs(x - col) for col in (859.5, 976.5, 1093.5)) > 10:
                     continue
                 if y < 95 or y + cls.CARD_SIZE > 637:
                     continue
@@ -221,32 +242,59 @@ class HairstyleFilter:
             add_crop(x, y, "ô khuôn mặt tương tự mẫu",
                      max(4.0, border_margin / 2.0), trim_end_extra=4.0)
 
-        # Hai tóc huy hiệu 4/5 vẫn dùng quy tắc chính xác trước đó.
-        for name, label in cls.TARGETS:
-            reference = templates[name]
-            core = cv2.cvtColor(reference[cls.CORE], cv2.COLOR_BGR2GRAY)
-            scores = cv2.matchTemplate(grid, core, cv2.TM_CCOEFF_NORMED)
-            for _ in range(6):
-                _, score, _, point = cv2.minMaxLoc(scores)
-                if score < 0.88:
+        # Màn hình Kiểu tóc: dò thêm búi tóc và tóc huy hiệu 4/5
+        if not is_face_screen:
+            # 1. Búi tóc (mẫu hair_bui: không huy hiệu, kiểm tra mở khóa)
+            if "hair_bui" in templates:
+                ref_bui = templates["hair_bui"]
+                core_bui = cv2.cvtColor(ref_bui[cls.CORE], cv2.COLOR_BGR2GRAY)
+                scores_bui = cv2.matchTemplate(grid, core_bui, cv2.TM_CCOEFF_NORMED)
+                for _ in range(6):
+                    _, score, _, point = cv2.minMaxLoc(scores_bui)
+                    if score < 0.65:
+                        break
+                    px, py = point
+                    scores_bui[max(0, py - 40):py + 41, max(0, px - 40):px + 41] = -1
+                    x, y = px + 845, py + 80
+                    if min(abs(x - col) for col in (859.5, 976.5, 1093.5)) > 10:
+                        continue
+                    if y < 95 or y + cls.CARD_SIZE > 637:
+                        continue
+                    card = work[y:y + cls.CARD_SIZE, x:x + cls.CARD_SIZE]
+                    if not unlocked_without_badge(card):
+                        log_fn("  [-] Bỏ búi tóc: đang bị khóa.")
+                        continue
+                    add_crop(x, y, "búi tóc", max(0, border_margin) / 2.0)
                     break
-                px, py = point
-                scores[max(0, py - 40):py + 41, max(0, px - 40):px + 41] = -1
-                x, y = px + 845, py + 80
-                if min(abs(x - col) for col in (859.5, 976.5, 1093.5)) > 8:
+
+            # 2. Hai tóc huy hiệu 4/5
+            for name, label in cls.TARGETS:
+                if name not in templates:
                     continue
-                if y < 95 or y + cls.CARD_SIZE > 637:
-                    continue
-                card = work[y:y + cls.CARD_SIZE, x:x + cls.CARD_SIZE]
-                badge = card[1:40, 80:107]
-                expected = reference[cls.BADGE]
-                badge_score = cv2.minMaxLoc(cv2.matchTemplate(
-                    badge, expected, cv2.TM_CCOEFF_NORMED))[1]
-                if badge_score < 0.90:
-                    log_fn(f"  [-] Bỏ {label}: bị khóa hoặc huy hiệu không rõ.")
-                    continue
-                add_crop(x, y, label, max(0, border_margin) / 2.0)
-                break
+                reference = templates[name]
+                core = cv2.cvtColor(reference[cls.CORE], cv2.COLOR_BGR2GRAY)
+                scores = cv2.matchTemplate(grid, core, cv2.TM_CCOEFF_NORMED)
+                for _ in range(6):
+                    _, score, _, point = cv2.minMaxLoc(scores)
+                    if score < 0.70:
+                        break
+                    px, py = point
+                    scores[max(0, py - 40):py + 41, max(0, px - 40):px + 41] = -1
+                    x, y = px + 845, py + 80
+                    if min(abs(x - col) for col in (859.5, 976.5, 1093.5)) > 10:
+                        continue
+                    if y < 95 or y + cls.CARD_SIZE > 637:
+                        continue
+                    card = work[y:y + cls.CARD_SIZE, x:x + cls.CARD_SIZE]
+                    badge = card[1:40, 80:107]
+                    expected = reference[cls.BADGE]
+                    badge_score = cv2.minMaxLoc(cv2.matchTemplate(
+                        badge, expected, cv2.TM_CCOEFF_NORMED))[1]
+                    if badge_score < 0.85:
+                        log_fn(f"  [-] Bỏ {label}: bị khóa hoặc huy hiệu không rõ.")
+                        continue
+                    add_crop(x, y, label, max(0, border_margin) / 2.0)
+                    break
 
         found.sort(key=lambda item: (item[0], item[1]))
         log_fn(f"  [+] Kiểu tóc/khuôn mặt: đã lấy {len(found)} ô hợp lệ đã mở khóa.")

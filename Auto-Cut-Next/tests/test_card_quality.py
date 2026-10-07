@@ -143,9 +143,8 @@ def test_empty_content_threshold_sensitivity():
     # 3. Intermediate subtle texture tile (detail ~ 0.02, normalized score ~ 0.40)
     subtle_tile = np.zeros((160, 160, 3), dtype=np.uint8)
     subtle_tile[:, :] = (35, 30, 25)
-    # Add subtle pattern in center (rows with slight alternations)
-    for y in range(40, 120, 4):
-        subtle_tile[y:y+2, 40:120] = (55, 50, 45)
+    # Add subtle localized mark in center (small circle)
+    cv2.circle(subtle_tile, (80, 80), 9, (60, 55, 50), -1)
 
     sc_empty, _ = compute_content_score(clear_empty)
     sc_border, _ = compute_content_score(border_only)

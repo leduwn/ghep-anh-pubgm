@@ -79,7 +79,7 @@ class CategoryRouter:
         if cat in (Category.ITEM_SET.value, Category.MISC.value):
             return self.inventory_detector, InventoryDetector.NAME, InventoryDetector.VERSION
 
-        return self.generic_grid_detector, GenericGridDetector.NAME, MISC_GRID_VERSION
+        return self.generic_grid_detector, GenericGridDetector.NAME, GenericGridDetector.VERSION
 
     def route(
         self,
@@ -119,7 +119,7 @@ class CategoryRouter:
                 diagnostics=generic_res.diagnostics,
                 fallback_recommended=False,
                 detector_name=GenericGridDetector.NAME,
-                detector_version=MISC_GRID_VERSION,
+                detector_version=GenericGridDetector.VERSION,
                 duration_ms=round(duration_ms, 2),
                 metadata={
                     "primary_detector": GenericGridDetector.NAME,
@@ -194,7 +194,7 @@ class CategoryRouter:
                     diagnostics=combined_diagnostics,
                     fallback_recommended=False,
                     detector_name=GenericGridDetector.NAME,
-                    detector_version=MISC_GRID_VERSION,
+                    detector_version=GenericGridDetector.VERSION,
                     duration_ms=round(duration_ms, 2),
                     metadata={
                         "primary_detector": primary_detector,
@@ -224,7 +224,7 @@ class CategoryRouter:
                     diagnostics=combined_diagnostics,
                     fallback_recommended=False,
                     detector_name=GenericGridDetector.NAME,
-                    detector_version=MISC_GRID_VERSION,
+                    detector_version=GenericGridDetector.VERSION,
                     duration_ms=round(duration_ms, 2),
                     metadata={
                         "primary_detector": primary_detector,
@@ -265,7 +265,7 @@ class CategoryRouter:
                 diagnostics=combined_diagnostics,
                 fallback_recommended=False,
                 detector_name=GenericGridDetector.NAME,
-                detector_version=MISC_GRID_VERSION,
+                detector_version=GenericGridDetector.VERSION,
                 duration_ms=round(duration_ms, 2),
                 metadata={
                     "primary_detector": primary_detector,
