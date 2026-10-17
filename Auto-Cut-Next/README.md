@@ -108,6 +108,35 @@ python Auto-Cut-Next/run.py ocr <ACCOUNT_ID> [--force] [--gun-only] [--uid-only]
 python Auto-Cut-Next/run.py info <ACCOUNT_ID>
 ```
 
+### Review Queue & Manual Resolution:
+```bash
+# Build/refresh review queue
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> build
+
+# List pending review items
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> list [--status OPEN] [--priority P0] [--subsystem CLASSIFICATION]
+
+# Inspect specific item
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> show <ITEM_ID>
+
+# Manual Category override (invalidates downstream detection/OCR)
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> set-category <SOURCE_ID> <CATEGORY>
+
+# Manual Weapon Level / Name / Elimination Counter override
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> set-level <ASSET_ID> <LEVEL_1_TO_20>
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> set-name <ASSET_ID> <WEAPON_NAME>
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> set-counter <ASSET_ID> <DIGITS>
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> clear-counter <ASSET_ID>
+
+# Manual Account UID override (8-14 digits)
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> set-uid <UID>
+
+# Item triage
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> reject <ITEM_ID>
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> skip <ITEM_ID>
+python Auto-Cut-Next/run.py review <ACCOUNT_ID> restore <ITEM_ID>
+```
+
 ### Running Benchmarks:
 ```bash
 python Auto-Cut-Next/scripts/benchmark_classifier.py
@@ -176,7 +205,19 @@ python -m pytest Auto-Cut-Next/tests -v
   - Single-Decode Source Grouping: `OCRScheduler` aggregates all gun level, gun name, kill counter, and UID targets by `source_id`, decodes each screenshot exactly once using `read_image_cv2`, and frees image memory immediately.
   - Manual Override Preservation: `GunMetadata` properties (`effective_level`, `effective_name`, `effective_counter`, `has_counter`) strictly prioritize user overrides (`level_manual`, `name_manual`, `counter_manual`), preserved across re-runs and invalidations.
   - CLI & Metrics: `ocr` subcommand, `info` command with weapon/UID statistics, and step 10 in `--self-test`. Comprehensive unit/integration pytest suite and microbenchmark script.
-- **Milestone 6 — Review System**: Planned.
+- **Milestone 6 — Unified Review & Manual Resolution Workflow (Hardened)**: Completed.
+  - `ReviewQueueBuilder` (`review/review_builder.py`): Deterministic queue generation across all stages (Classification, Detection, Asset Quality, OCR Gun, and Account UID).
+    - Subsystem Priorities: P0 (errors, corrupt images), P1 (unknown classifications, missing detections, UID conflicts), P2 (uncertain low-confidence, borderline quality, field OCR), P3 (informational warnings, duplicate assets).
+    - Production Stability: Fully typed `confidence` (float) and `specialized_attempted` (bool) on `SourceDetectionResult` ensuring crash-free queue building across all detection status paths (`SUCCESS`, `REVIEW`, `NO_GRID`, `DEFERRED`, `ERROR`).
+    - Deterministic Fingerprinting: Canonical sorted-key SHA-256 machine state hashing to detect staleness and reopen previously resolved items if underlying detector/OCR models change.
+  - `ReviewService` (`review/review_service.py`): Manual action execution engine with complete audit history (`ReviewActionRecord`).
+    - Precedence Hierarchy: User manual decisions take absolute precedence over machine classification, cache, and forced re-runs (`source.manual_category` overrides `classify_session(force=True)`).
+    - Downstream Cascading Invalidation: Setting manual category automatically prunes obsolete child detections, assets, OCR targets, and associated review queue items.
+    - Asset Rejection Semantics: Rejecting an asset (`manual_rejected = True`) strictly excludes it from active asset counts (`get_active_assets_by_category`), layout engines, and PSD export inputs without conflating with positive overrides (`manual_override`). Restorable via `restore_item`.
+    - Manual Clear-Counter Semantics: Clearing kill counter sets persistent `counter_absent_manual = True` and `counter_manual = None`, guaranteeing `effective_counter is None` and protecting manual absence from overwrite by forced OCR runs.
+    - Input Validation Safety: Strict domain validation for weapon levels (1–20), asset category verification (`GUN`), non-empty weapon names, and strict ASCII regex UID validation (`^[0-9]{8,14}$`).
+    - Metadata Preservation Across Runs: Logical asset matching (by ID, bounding box IoU >= 0.70, or unique single-asset presence) preserves user manual overrides across forced detector runs while retiring unmatched old assets as `STALE`.
+  - Self-Test Suite: 11/11 PASS (`python Auto-Cut-Next/run.py --self-test`).
 - **Milestone 7 — Layout Engine**: Planned.
 - **Milestone 8 — Preview & Editor**: Planned.
 - **Milestone 9 — Photoshop Bridge & PSD Export**: Planned.

@@ -28,7 +28,7 @@ def run_self_test() -> int:
     import tempfile
 
     # 1. Imports
-    print("[1/10] Checking core imports...")
+    print("[1/11] Checking core imports...")
     try:
         from core.models import SourceImage, Rect, DetectedAsset, AccountSession
         from core.ingest import ImageIngestor
@@ -40,7 +40,7 @@ def run_self_test() -> int:
         return 1
 
     # 2. Settings validation & canonical default loading
-    print("[2/10] Validating settings & canonical default...")
+    print("[2/11] Validating settings & canonical default...")
     try:
         settings = AutoCutSettings.load_default()
         settings.validate()
@@ -53,7 +53,7 @@ def run_self_test() -> int:
         return 1
 
     # 3. Workspace atomic session write
-    print("[3/10] Testing atomic workspace session write & schema check...")
+    print("[3/11] Testing atomic workspace session write & schema check...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             ws = WorkspaceManager(temp_dir)
@@ -69,7 +69,7 @@ def run_self_test() -> int:
         return 1
 
     # 4. Ingestor & Sandbox enforcement
-    print("[4/10] Checking ingestor & sandbox traversal protection...")
+    print("[4/11] Checking ingestor & sandbox traversal protection...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -92,7 +92,7 @@ def run_self_test() -> int:
         return 1
 
     # 5. Atomic DiskCache & corruption recovery
-    print("[5/10] Testing atomic disk cache & corruption recovery...")
+    print("[5/11] Testing atomic disk cache & corruption recovery...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             cache = DiskCache(temp_dir)
@@ -110,7 +110,7 @@ def run_self_test() -> int:
         return 1
 
     # 6. Logger isolation & lifecycle
-    print("[6/10] Testing logger instance isolation & cleanup...")
+    print("[6/11] Testing logger instance isolation & cleanup...")
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
             td = Path(temp_dir)
@@ -136,7 +136,7 @@ def run_self_test() -> int:
         return 1
 
     # 7. Classifier smoke test
-    print("[7/10] Testing screen classifier initialization & smoke categorization...")
+    print("[7/11] Testing screen classifier initialization & smoke categorization...")
     try:
         import numpy as np
         from core.constants import Category, Decision
@@ -155,7 +155,7 @@ def run_self_test() -> int:
         return 1
 
     # 8. Generic grid detector smoke test
-    print("[8/10] Testing generic grid detector & card quality smoke test...")
+    print("[8/11] Testing generic grid detector & card quality smoke test...")
     try:
         import cv2
         import numpy as np
@@ -181,7 +181,7 @@ def run_self_test() -> int:
         return 1
 
     # 9. Specialized detectors & CategoryRouter smoke test
-    print("[9/10] Testing specialized PUBG detectors & CategoryRouter...")
+    print("[9/11] Testing specialized PUBG detectors & CategoryRouter...")
     try:
         from core.models import ClassificationResult
         from detectors import CategoryRouter
@@ -222,7 +222,7 @@ def run_self_test() -> int:
         return 1
 
     # 10. OCR Engine & Scheduler smoke test
-    print("[10/10] Testing OCR parsers, fake engine, and multi-source consensus...")
+    print("[10/11] Testing OCR parsers, fake engine, and multi-source consensus...")
     try:
         from ocr.models import OCRObservation
         from ocr.parsers import parse_gun_level, parse_gun_name, parse_uid
@@ -274,7 +274,16 @@ def run_self_test() -> int:
             session = AccountSession(account_id="self_test_review")
 
             # Add source and classification needing review
-            src = SourceImage(id="src_1", filename="screen_1.png", path=temp_dir, sha256="abc123", source_index=0)
+            src = SourceImage(
+                id="src_1",
+                filename="screen_1.png",
+                path=temp_dir,
+                sha256="abc123",
+                source_index=0,
+                width=2778,
+                height=1284,
+                mtime=1700000000.0,
+            )
             session.sources[src.id] = src
             session.classifications[src.id] = ClassificationResult(
                 category="GUN",
@@ -289,6 +298,10 @@ def run_self_test() -> int:
                 source_id=src.id,
                 category="GUN",
                 crop_rect=Rect(10, 10, 100, 100),
+                native_width=2778,
+                native_height=1284,
+                detector="gun_detector",
+                detector_version="2.0.0",
                 gun_metadata=GunMetadata(
                     weapon_name="M416",
                     name_confidence=0.95,
@@ -323,15 +336,46 @@ def run_self_test() -> int:
             assert res_uid.status == ReviewStatus.RESOLVED_MANUAL.value
             assert session.effective_uid == "5123456789"
 
+            # Clear counter semantics check
+            res_clr = service.clear_counter("asset_gun_1", notes="Badge absent")
+            assert res_clr.status == ReviewStatus.RESOLVED_MANUAL.value
+            assert asset.gun_metadata.counter_absent_manual is True
+            assert asset.gun_metadata.effective_counter is None
+            assert asset.gun_metadata.has_counter is False
+
+            # Asset rejection check
+            res_rej = service.reject_item(res_lvl.id)
+            assert res_rej.status == ReviewStatus.REJECTED.value
+            assert asset.manual_rejected is True
+            assert asset not in session.get_active_assets_by_category("GUN")
+
             # Category override with downstream invalidation
             res_cat = service.set_category("src_1", "VEHICLE", notes="Actually vehicle")
             assert res_cat.status == ReviewStatus.RESOLVED_MANUAL.value
+            assert src.manual_category == "VEHICLE"
+            assert src.effective_category == "VEHICLE"
             assert len(session.assets) == 0  # Invalidated downstream gun asset!
-            assert len(session.review_history) >= 3  # Audit actions recorded
+            assert len(session.review_history) >= 4  # Audit actions recorded
 
             # Rebuild queue: gun asset OCR review items pruned
             rebuilt = builder.build_queue(session)
             assert not any(it.asset_id == "asset_gun_1" for it in rebuilt)
+
+            # Persistence roundtrip & force precedence check
+            ws.save_session(session)
+            reloaded = ws.load_session("self_test_review")
+            assert reloaded.sources["src_1"].manual_category == "VEHICLE"
+            assert reloaded.sources["src_1"].effective_category == "VEHICLE"
+            assert reloaded.classifications["src_1"].category == "VEHICLE"
+
+            pipeline = AutoCutPipeline(workspace=ws)
+            pipeline.classify_session("self_test_review", force=True)
+            re_classified = ws.load_session("self_test_review")
+            assert re_classified.sources["src_1"].manual_category == "VEHICLE"
+            assert re_classified.sources["src_1"].effective_category == "VEHICLE"
+            assert re_classified.classifications["src_1"].category == "VEHICLE"
+
+            pipeline.logger.close()
 
         print("      PASS: Review queue builder, manual resolutions, and downstream invalidation verified.")
     except Exception as exc:
@@ -728,16 +772,18 @@ def main() -> int:
             return 1
 
         pipeline = AutoCutPipeline()
-        service = pipeline.get_review_service(args.account)
 
         action = getattr(args, "review_action", None)
         if not action or action == "build":
             session = pipeline.build_review_queue(args.account)
+            service = pipeline.get_review_service(args.account)
             print(f"[+] Review queue built for '{args.account}'. Total items: {len(session.review_items)}")
             summary = service.get_summary()
             print(f"    Open: {summary['open']} (P0={summary['open_by_priority']['P0']}, P1={summary['open_by_priority']['P1']}, P2={summary['open_by_priority']['P2']}, P3={summary['open_by_priority']['P3']})")
             print(f"    Resolved Manual: {summary['resolved_manual']}")
             return 0
+
+        service = pipeline.get_review_service(args.account)
 
         if action == "list":
             items = service.list_items(status=args.status, priority=args.priority, subsystem=args.subsystem)

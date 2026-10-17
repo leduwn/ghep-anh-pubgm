@@ -137,6 +137,7 @@ class ReviewReason(str, Enum):
     SEMANTIC_FALLBACK = "semantic_fallback"
     NO_GRID = "no_grid"
     DETECTION_REVIEW = "detection_review"
+    DEFERRED_DETECTION = "deferred_detection"
 
     # Asset Quality
     PARTIAL_ASSET = "partial_asset"

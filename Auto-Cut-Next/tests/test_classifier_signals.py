@@ -128,3 +128,41 @@ def test_detail_popup_signals():
     sig = detect_detail_popup_signals(ctx)
     assert sig.score >= 0.7
     assert "item detail frame" in sig.reason.lower()
+
+
+def test_detail_popup_signals_bright_lobby():
+    """Validates bright lobby popup detection (white background with colored banner & dark header)."""
+    w, h = 2778, 1284
+    # Bright lobby background (white palace / marble floor)
+    img = np.full((h, w, 3), 225, dtype=np.uint8)
+
+    # Dark header capsule "Nhấn giữ để phân loại" (y=875..945, x=1360..1640)
+    img[875:945, 1360:1640] = 55
+    cv2.putText(img, "Nhan giu de phan loai", (1380, 915), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+    # High-saturation colored banner (Red X-Suit or Gold Mythic) at (y=1000..1095, x=1325..1685)
+    img[1000:1095, 1325:1685] = (30, 30, 230)
+
+    # Action button at bottom
+    cv2.rectangle(img, (1380, 1145), (1620, 1225), (40, 40, 40), -1)
+
+    # Right edge boundary step at x=1685
+    cv2.line(img, (1685, 875), (1685, 1240), (80, 80, 80), 3)
+
+    ctx = ClassificationContext(img)
+    sig = detect_detail_popup_signals(ctx)
+    assert sig.score >= 0.7
+    assert "item detail frame" in sig.reason.lower()
+
+
+def test_detail_popup_signals_outfit_without_popup():
+    """Validates that normal outfit screens (no popup vertical edge) are NOT classified as popup."""
+    w, h = 2778, 1284
+    img = np.full((h, w, 3), 180, dtype=np.uint8)
+    # Character with colored clothing in center/legs (no edge at 1685)
+    img[950:1150, 1300:1600] = (40, 60, 200)
+
+    ctx = ClassificationContext(img)
+    sig = detect_detail_popup_signals(ctx)
+    assert sig.score == 0.0
+

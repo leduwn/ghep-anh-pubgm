@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
@@ -58,7 +59,11 @@ def compute_machine_fingerprint(
 
     Used to detect if machine state materially changed after user accepted it.
     """
-    token = f"{subsystem_version}|{value}|{confidence:.4f}|{reason}|{extra_token}"
+    if isinstance(value, (dict, list)):
+        val_str = json.dumps(to_json_native(value), sort_keys=True, separators=(",", ":"))
+    else:
+        val_str = str(value)
+    token = f"{subsystem_version}|{val_str}|{confidence:.4f}|{reason}|{extra_token}"
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional, Union
 
 from core.constants import (
@@ -12,6 +13,8 @@ from core.constants import (
     ReviewStatus,
     ReviewPriority,
     ReviewReason,
+    DEFAULT_OCR_ACCEPT_THRESHOLD,
+    DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD,
 )
 from core.models import AccountSession, GunMetadata
 from core.session import WorkspaceManager
@@ -38,11 +41,20 @@ class ReviewService:
         session: AccountSession,
         workspace: WorkspaceManager,
         pipeline: Optional[Any] = None,
+        builder: Optional[ReviewQueueBuilder] = None,
     ):
         self.session = session
         self.workspace = workspace
         self.pipeline = pipeline
-        self.builder = ReviewQueueBuilder()
+        if builder is not None:
+            self.builder = builder
+        elif pipeline is not None and hasattr(pipeline, "settings"):
+            self.builder = ReviewQueueBuilder(
+                ocr_accept_threshold=getattr(pipeline.settings, "ocr_accept_threshold", DEFAULT_OCR_ACCEPT_THRESHOLD),
+                detector_confidence_threshold=getattr(pipeline.settings, "detector_confidence_threshold", DEFAULT_DETECTOR_CONFIDENCE_THRESHOLD),
+            )
+        else:
+            self.builder = ReviewQueueBuilder()
 
     def get_item(self, item_id: str) -> Optional[ReviewItem]:
         """Retrieves a review item by deterministic ID."""
@@ -147,7 +159,7 @@ class ReviewService:
             old_cat = self.session.classifications[source_id].category
 
         # 1. Update source manual category and classification
-        setattr(src, "manual_category", cat_upper)
+        src.manual_category = cat_upper
         if source_id in self.session.classifications:
             cl = self.session.classifications[source_id]
             cl.category = cat_upper
@@ -221,12 +233,14 @@ class ReviewService:
         notes: Optional[str] = None,
     ) -> ReviewItem:
         """Sets manual weapon level on Gun asset."""
-        if not (1 <= int(level) <= 100):
-            raise ValueError(f"Weapon level must be between 1 and 100, got {level}")
+        if not (1 <= int(level) <= 20):
+            raise ValueError(f"Weapon level must be between 1 and 20, got {level}")
 
         target_asset = next((a for a in self.session.assets if a.id == asset_id), None)
         if target_asset is None:
             raise KeyError(f"Asset '{asset_id}' not found")
+        if target_asset.category != Category.GUN.value:
+            raise ValueError(f"Asset '{asset_id}' has category '{target_asset.category}', expected 'GUN'")
 
         if target_asset.gun_metadata is None:
             target_asset.gun_metadata = GunMetadata()
@@ -286,6 +300,8 @@ class ReviewService:
         target_asset = next((a for a in self.session.assets if a.id == asset_id), None)
         if target_asset is None:
             raise KeyError(f"Asset '{asset_id}' not found")
+        if target_asset.category != Category.GUN.value:
+            raise ValueError(f"Asset '{asset_id}' has category '{target_asset.category}', expected 'GUN'")
 
         if target_asset.gun_metadata is None:
             target_asset.gun_metadata = GunMetadata()
@@ -339,16 +355,21 @@ class ReviewService:
     ) -> ReviewItem:
         """Sets manual kill counter on Gun asset."""
         cnt_val = str(counter).strip()
+        if not (cnt_val.isdigit() and 1 <= len(cnt_val) <= 8):
+            raise ValueError(f"Counter must be 1-8 numeric digits, got '{counter}'")
 
         target_asset = next((a for a in self.session.assets if a.id == asset_id), None)
         if target_asset is None:
             raise KeyError(f"Asset '{asset_id}' not found")
+        if target_asset.category != Category.GUN.value:
+            raise ValueError(f"Asset '{asset_id}' has category '{target_asset.category}', expected 'GUN'")
 
         if target_asset.gun_metadata is None:
             target_asset.gun_metadata = GunMetadata()
 
         old_cnt = target_asset.gun_metadata.effective_counter
         target_asset.gun_metadata.counter_manual = cnt_val
+        target_asset.gun_metadata.counter_absent_manual = False
         target_asset.gun_metadata.counter_present = True
 
         item_id = make_ocr_review_id(asset_id, "counter")
@@ -398,12 +419,15 @@ class ReviewService:
         target_asset = next((a for a in self.session.assets if a.id == asset_id), None)
         if target_asset is None:
             raise KeyError(f"Asset '{asset_id}' not found")
+        if target_asset.category != Category.GUN.value:
+            raise ValueError(f"Asset '{asset_id}' has category '{target_asset.category}', expected 'GUN'")
 
         if target_asset.gun_metadata is None:
             target_asset.gun_metadata = GunMetadata()
 
         old_cnt = target_asset.gun_metadata.effective_counter
         target_asset.gun_metadata.counter_manual = None
+        target_asset.gun_metadata.counter_absent_manual = True
         target_asset.gun_metadata.counter_present = False
 
         item_id = make_ocr_review_id(asset_id, "counter")
@@ -451,7 +475,7 @@ class ReviewService:
     ) -> ReviewItem:
         """Sets manual UID override (strictly 8-14 digits) surviving machine reruns."""
         clean_uid = str(uid).strip()
-        if not (clean_uid.isdigit() and 8 <= len(clean_uid) <= 14):
+        if not re.fullmatch(r"[0-9]{8,14}", clean_uid):
             raise ValueError(f"Account UID must be 8-14 digits, got '{uid}'")
 
         old_uid = self.session.effective_uid
@@ -497,7 +521,7 @@ class ReviewService:
         item_id: str,
         notes: Optional[str] = None,
     ) -> ReviewItem:
-        """Marks review item as rejected."""
+        """Marks review item as rejected and excludes target asset if applicable."""
         item = self.session.review_items.get(item_id)
         if item is None:
             raise KeyError(f"Review item '{item_id}' not found")
@@ -510,11 +534,58 @@ class ReviewService:
         )
         item.touch()
 
-        # If item targets an asset, mark asset manual override
+        # If item targets an asset, mark asset as rejected
         if item.asset_id:
             asset = next((a for a in self.session.assets if a.id == item.asset_id), None)
             if asset:
-                asset.manual_override = True
+                asset.manual_rejected = True
+
+        action = ReviewAction(
+            review_item_id=item_id,
+            action="reject",
+            old_value=item.machine_value,
+            new_value="REJECTED",
+            notes=notes,
+        )
+        self.session.review_history.append(action)
+
+        self.session.touch()
+        self.workspace.save_session(self.session)
+        logger.info(f"Rejected review item '{item_id}'")
+        return item
+
+    def restore_item(
+        self,
+        item_id: str,
+        notes: Optional[str] = None,
+    ) -> ReviewItem:
+        """Restores a previously rejected review item (and un-rejects associated asset)."""
+        item = self.session.review_items.get(item_id)
+        if item is None:
+            raise KeyError(f"Review item '{item_id}' not found")
+
+        item.status = ReviewStatus.OPEN.value
+        item.resolution = None
+        item.touch()
+
+        if item.asset_id:
+            asset = next((a for a in self.session.assets if a.id == item.asset_id), None)
+            if asset:
+                asset.manual_rejected = False
+
+        action = ReviewAction(
+            review_item_id=item_id,
+            action="restore",
+            old_value="REJECTED",
+            new_value="OPEN",
+            notes=notes or "Restored rejected item",
+        )
+        self.session.review_history.append(action)
+
+        self.session.touch()
+        self.workspace.save_session(self.session)
+        logger.info(f"Restored review item '{item_id}'")
+        return item
 
         action = ReviewAction(
             review_item_id=item_id,

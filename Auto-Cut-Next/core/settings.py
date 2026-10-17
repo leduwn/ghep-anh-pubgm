@@ -74,6 +74,14 @@ class AutoCutSettings:
 
     # Backward-compatibility property aliases
     @property
+    def ocr_confidence_threshold(self) -> float:
+        return self.ocr_accept_threshold
+
+    @ocr_confidence_threshold.setter
+    def ocr_confidence_threshold(self, val: float) -> None:
+        self.ocr_accept_threshold = val
+
+    @property
     def empty_detail_threshold(self) -> float:
         return self.empty_content_threshold
 

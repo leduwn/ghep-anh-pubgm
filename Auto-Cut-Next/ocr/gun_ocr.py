@@ -171,6 +171,7 @@ class GunOCRExtractor:
         prev_lvl_man = asset.gun_metadata.level_manual if asset.gun_metadata else None
         prev_nm_man = asset.gun_metadata.name_manual if asset.gun_metadata else None
         prev_cnt_man = asset.gun_metadata.counter_manual if asset.gun_metadata else None
+        prev_cnt_absent = asset.gun_metadata.counter_absent_manual if asset.gun_metadata else False
 
         asset.gun_metadata = GunMetadata(
             level=result.level,
@@ -182,15 +183,16 @@ class GunOCRExtractor:
             level_manual=prev_lvl_man,
             name_manual=prev_nm_man,
             counter_manual=prev_cnt_man,
+            counter_absent_manual=prev_cnt_absent,
             raw_level_text=result.raw_level_text,
             raw_name_text=result.raw_name_text,
             raw_counter_text=result.raw_counter_text,
-            counter_present=result.counter_present,
+            counter_present=False if prev_cnt_absent else result.counter_present,
             counter_confidence=result.counter_confidence,
             level_confidence=result.level_confidence,
             name_confidence=result.name_confidence,
             level_source=result.level_source,
-            needs_review=result.review_required,
+            needs_review=result.review_required if not prev_cnt_absent else False,
             review_reasons=list(result.review_reasons),
         )
 

@@ -40,22 +40,22 @@ def test_classification_review_generation():
     session = AccountSession(account_id="test_acc")
 
     # Source 1: AUTO_ACCEPT -> NO review
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
     session.classifications[s1.id] = ClassificationResult(Category.GUN.value, 0.98, Decision.AUTO_ACCEPT.value)
 
     # Source 2: REVIEW -> P2 review
-    s2 = SourceImage(id="s2", filename="screen_2.png", path="", sha256="h2", source_index=1)
+    s2 = SourceImage(id="s2", filename="screen_2.png", path="", sha256="h2", source_index=1, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s2.id] = s2
     session.classifications[s2.id] = ClassificationResult(Category.VEHICLE.value, 0.52, Decision.REVIEW.value)
 
     # Source 3: UNKNOWN -> P1 review
-    s3 = SourceImage(id="s3", filename="screen_3.png", path="", sha256="h3", source_index=2)
+    s3 = SourceImage(id="s3", filename="screen_3.png", path="", sha256="h3", source_index=2, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s3.id] = s3
     session.classifications[s3.id] = ClassificationResult(Category.OTHER.value, 0.0, Decision.UNKNOWN.value)
 
     # Source 4: ERROR -> P0 review
-    s4 = SourceImage(id="s4", filename="screen_4.png", path="", sha256="h4", source_index=3)
+    s4 = SourceImage(id="s4", filename="screen_4.png", path="", sha256="h4", source_index=3, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s4.id] = s4
     session.classifications[s4.id] = ClassificationResult(Category.OTHER.value, 0.0, Decision.ERROR.value)
 
@@ -75,7 +75,7 @@ def test_classification_review_generation():
 def test_field_level_ocr_gun_and_counter_semantics():
     """OCR field-level review independently evaluates name, level, and counter badge presence."""
     session = AccountSession(account_id="test_acc")
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
 
     # Case A: High name confidence (.95), low level confidence (.42), badge absent
@@ -85,6 +85,10 @@ def test_field_level_ocr_gun_and_counter_semantics():
         source_id=s1.id,
         category=Category.GUN.value,
         crop_rect=Rect(0, 0, 100, 100),
+        native_width=2778,
+        native_height=1284,
+        detector="gun_detector",
+        detector_version="2.0.0",
         gun_metadata=GunMetadata(
             weapon_name="M416",
             name_confidence=0.95,
@@ -120,6 +124,10 @@ def test_field_level_ocr_gun_and_counter_semantics():
         source_id=s1.id,
         category=Category.GUN.value,
         crop_rect=Rect(100, 0, 100, 100),
+        native_width=2778,
+        native_height=1284,
+        detector="gun_detector",
+        detector_version="2.0.0",
         gun_metadata=GunMetadata(
             weapon_name="AKM",
             name_confidence=0.90,
@@ -167,7 +175,7 @@ def test_uid_consensus_review_generation():
 def test_staleness_detection_on_machine_acceptance():
     """Machine value acceptance becomes STALE and re-opens if machine fingerprint materially changes."""
     session = AccountSession(account_id="test_acc")
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
     session.classifications[s1.id] = ClassificationResult(Category.GUN.value, 0.55, Decision.REVIEW.value, detector_version="1.0.0")
 

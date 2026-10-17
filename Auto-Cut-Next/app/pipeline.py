@@ -16,6 +16,7 @@ from core.constants import (
     Decision,
     Category,
     DetectionStatus,
+    ReviewStatus,
     CLASSIFIER_VERSION,
     ROUTER_VERSION,
     MISC_GRID_VERSION,
@@ -24,7 +25,7 @@ from core.cache import DiskCache, CacheKeyGenerator
 from core.ingest import ImageIngestor
 from core.logging import StageLogger
 from core.metrics import MetricsCollector
-from core.models import AccountSession, SourceImage, ClassificationResult, DetectedAsset
+from core.models import AccountSession, SourceImage, ClassificationResult, DetectedAsset, GunMetadata
 from core.session import WorkspaceManager
 from core.settings import AutoCutSettings
 from detectors import (
@@ -207,6 +208,26 @@ class AutoCutPipeline:
             for source in successful_sources:
                 self.metrics.classify_seen += 1
                 source_path = Path(source.path)
+
+                # Manual category takes precedence over machine classification, cache, and force re-classification
+                if source.manual_category:
+                    man_cat = source.manual_category
+                    if source.id in session.classifications:
+                        cl = session.classifications[source.id]
+                        cl.category = man_cat
+                        cl.decision = Decision.AUTO_ACCEPT.value
+                        cl.confidence = 1.0
+                        cl.reasons = [f"Manual override category '{man_cat}'"]
+                    else:
+                        session.classifications[source.id] = ClassificationResult(
+                            category=man_cat,
+                            confidence=1.0,
+                            decision=Decision.AUTO_ACCEPT.value,
+                            reasons=[f"Manual override category '{man_cat}'"],
+                        )
+                    self.metrics.classify_auto += 1
+                    self.metrics.sources_classified += 1
+                    continue
 
                 # Compatible session result reuse
                 if not force and source.id in session.classifications:
@@ -463,6 +484,8 @@ class AutoCutPipeline:
                         status=DetectionStatus.DEFERRED.value,
                         detector="generic_grid_detector",
                         detector_version=MISC_GRID_VERSION,
+                        confidence=0.0,
+                        specialized_attempted=False,
                         reasons=["Specialized detector required (deferred to M4)"],
                     )
                     session.touch()
@@ -475,6 +498,8 @@ class AutoCutPipeline:
                         status=DetectionStatus.ERROR.value,
                         detector="generic_grid_detector",
                         detector_version=MISC_GRID_VERSION,
+                        confidence=0.0,
+                        specialized_attempted=False,
                         reasons=["Classification version stale; reclassification required"],
                         error_message="Classification version stale",
                     )
@@ -490,6 +515,8 @@ class AutoCutPipeline:
                         status=DetectionStatus.ERROR.value,
                         detector="generic_grid_detector",
                         detector_version=MISC_GRID_VERSION,
+                        confidence=0.0,
+                        specialized_attempted=False,
                         reasons=[err_msg],
                         error_message=err_msg,
                     )
@@ -551,6 +578,8 @@ class AutoCutPipeline:
                         detector=det_name,
                         detector_version=det_ver,
                         primary_detector=det_name,
+                        confidence=0.0,
+                        specialized_attempted=False,
                         reasons=[err_msg],
                         error_message=err_msg,
                     )
@@ -614,6 +643,56 @@ class AutoCutPipeline:
                         source_review_required=(class_res.decision == Decision.REVIEW.value),
                     )
 
+                    # Preserve manual asset metadata across detector runs
+                    old_assets = [a for a in session.assets if a.source_id == source.id]
+                    matched_old_ids = set()
+                    for new_a in assets:
+                        matched_old = None
+                        for old_a in old_assets:
+                            if old_a.id == new_a.id:
+                                matched_old = old_a
+                                break
+                        if matched_old is None:
+                            best_iou = 0.0
+                            for old_a in old_assets:
+                                if old_a.category == new_a.category:
+                                    sim = old_a.crop_rect.iou(new_a.crop_rect)
+                                    if sim > best_iou and sim >= 0.70:
+                                        best_iou = sim
+                                        matched_old = old_a
+                        if matched_old is None and len(old_assets) == 1 and len(assets) == 1:
+                            if old_assets[0].category == new_a.category:
+                                matched_old = old_assets[0]
+
+                        if matched_old is not None:
+                            matched_old_ids.add(matched_old.id)
+                            if matched_old.manual_rejected:
+                                new_a.manual_rejected = True
+                            if matched_old.manual_override:
+                                new_a.manual_override = True
+                            if matched_old.gun_metadata is not None:
+                                if new_a.gun_metadata is None:
+                                    new_a.gun_metadata = GunMetadata()
+                                if matched_old.gun_metadata.level_manual is not None:
+                                    new_a.gun_metadata.level_manual = matched_old.gun_metadata.level_manual
+                                if matched_old.gun_metadata.name_manual is not None:
+                                    new_a.gun_metadata.name_manual = matched_old.gun_metadata.name_manual
+                                if matched_old.gun_metadata.counter_manual is not None:
+                                    new_a.gun_metadata.counter_manual = matched_old.gun_metadata.counter_manual
+                                    new_a.gun_metadata.counter_present = True
+                                if matched_old.gun_metadata.counter_absent_manual:
+                                    new_a.gun_metadata.counter_absent_manual = True
+                                    new_a.gun_metadata.counter_manual = None
+                                    new_a.gun_metadata.counter_present = False
+
+                    # Mark review items for unmatched old assets as STALE
+                    for old_a in old_assets:
+                        if old_a.id not in matched_old_ids:
+                            for rev_item in session.review_items.values():
+                                if rev_item.asset_id == old_a.id and rev_item.is_open:
+                                    rev_item.status = ReviewStatus.STALE.value
+                                    rev_item.touch()
+
                     # Invalidate only previously detected assets for this source
                     session.invalidate_detection_assets_for_source(source.id)
                     for a in assets:
@@ -627,7 +706,7 @@ class AutoCutPipeline:
                     self.metrics.partial_found += sum(1 for a in assets if a.partial)
                     self.metrics.detector_review_required += sum(1 for a in assets if a.review_required)
 
-                    active_cnt = sum(1 for a in assets if not (a.locked or a.empty or a.partial or a.duplicate))
+                    active_cnt = sum(1 for a in assets if not (a.locked or a.empty or a.partial or a.duplicate or a.manual_rejected))
                     rev_cnt = sum(1 for a in assets if a.review_required)
 
                     is_low_conf = spec_res.confidence < self.settings.detector_confidence_threshold
@@ -645,6 +724,8 @@ class AutoCutPipeline:
                         fallback_detector=spec_res.metadata.get("fallback_detector"),
                         fallback_attempted=bool(spec_res.metadata.get("fallback_attempted", False)),
                         fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
+                        confidence=float(spec_res.confidence),
+                        specialized_attempted=bool(spec_res.metadata.get("specialized_attempted", False)),
                         specialized_confidence=float(spec_res.metadata.get("specialized_confidence", spec_res.confidence)),
                         fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
                         card_count=len(assets),
@@ -668,6 +749,8 @@ class AutoCutPipeline:
                         fallback_detector=spec_res.metadata.get("fallback_detector"),
                         fallback_attempted=bool(spec_res.metadata.get("fallback_attempted", False)),
                         fallback_used=bool(spec_res.metadata.get("fallback_used", False)),
+                        confidence=float(spec_res.confidence),
+                        specialized_attempted=bool(spec_res.metadata.get("specialized_attempted", False)),
                         specialized_confidence=float(spec_res.metadata.get("specialized_confidence", 0.0)),
                         fallback_confidence=float(spec_res.metadata.get("fallback_confidence", 0.0)),
                         card_count=0,
@@ -815,7 +898,7 @@ class AutoCutPipeline:
         from review.review_builder import ReviewQueueBuilder
 
         builder = ReviewQueueBuilder(
-            ocr_accept_threshold=self.settings.ocr_confidence_threshold,
+            ocr_accept_threshold=self.settings.ocr_accept_threshold,
             detector_confidence_threshold=self.settings.detector_confidence_threshold,
         )
         with self.metrics.timer("review"):

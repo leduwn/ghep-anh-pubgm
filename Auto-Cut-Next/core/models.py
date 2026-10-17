@@ -122,6 +122,12 @@ class SourceImage:
     source_index: int
     status: str = SourceStatus.SUCCESS.value
     error_message: Optional[str] = None
+    manual_category: Optional[str] = None
+
+    @property
+    def effective_category(self) -> Optional[str]:
+        """Returns manual category override if present, else None."""
+        return self.manual_category
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -139,6 +145,7 @@ class SourceImage:
             source_index=int(data["source_index"]),
             status=str(data.get("status", SourceStatus.SUCCESS.value)),
             error_message=data.get("error_message"),
+            manual_category=data.get("manual_category"),
         )
 
 
@@ -195,6 +202,7 @@ class GunMetadata:
     level_manual: Optional[int] = None
     name_manual: Optional[str] = None
     counter_manual: Optional[str] = None
+    counter_absent_manual: bool = False
     raw_level_text: Optional[str] = None
     raw_name_text: Optional[str] = None
     raw_counter_text: Optional[str] = None
@@ -222,10 +230,14 @@ class GunMetadata:
 
     @property
     def effective_counter(self) -> Optional[str]:
+        if self.counter_absent_manual:
+            return None
         return self.counter_manual if self.counter_manual is not None else self.kill_counter
 
     @property
     def has_counter(self) -> bool:
+        if self.counter_absent_manual:
+            return False
         if self.counter_manual is not None:
             return bool(self.counter_manual.strip())
         return self.counter_present and bool(self.effective_counter)
@@ -245,6 +257,7 @@ class GunMetadata:
             level_manual=data.get("level_manual"),
             name_manual=data.get("name_manual"),
             counter_manual=data.get("counter_manual"),
+            counter_absent_manual=bool(data.get("counter_absent_manual", False)),
             raw_level_text=data.get("raw_level_text"),
             raw_name_text=data.get("raw_name_text"),
             raw_counter_text=data.get("raw_counter_text"),
@@ -319,6 +332,7 @@ class DetectedAsset:
     metadata: dict[str, Any] = field(default_factory=dict)
     gun_metadata: Optional[GunMetadata] = None
     manual_override: bool = False
+    manual_rejected: bool = False
     review_required: bool = False
     review_reasons: list[str] = field(default_factory=list)
     order: int = 0
@@ -373,6 +387,7 @@ class DetectedAsset:
             metadata=dict(data.get("metadata", {})),
             gun_metadata=gun_meta,
             manual_override=bool(data.get("manual_override", False)),
+            manual_rejected=bool(data.get("manual_rejected", False)),
             review_required=bool(data.get("review_required", False)),
             review_reasons=list(data.get("review_reasons", [])),
             order=int(data.get("order", 0)),
@@ -551,7 +566,7 @@ class AccountSession:
         return [
             a for a in self.assets
             if a.category.upper() == target
-            and not a.locked and not a.empty and not a.partial and not a.duplicate
+            and not a.locked and not a.empty and not a.partial and not a.duplicate and not a.manual_rejected
         ]
 
     def get_active_assets_by_category(self, category: str) -> list[DetectedAsset]:

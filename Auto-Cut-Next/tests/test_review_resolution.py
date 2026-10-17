@@ -24,6 +24,7 @@ from core.models import (
 )
 from core.session import WorkspaceManager
 from review.models import (
+    ReviewItem,
     make_classification_review_id,
     make_ocr_review_id,
     make_uid_review_id,
@@ -42,7 +43,7 @@ def test_env():
 def test_category_override_and_downstream_invalidation(test_env):
     """Overriding category invalidates source detection, assets, orphan OCR, and records audit trail."""
     ws, session = test_env
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
     session.classifications[s1.id] = ClassificationResult(Category.GUN.value, 0.50, Decision.REVIEW.value)
 
@@ -53,6 +54,10 @@ def test_category_override_and_downstream_invalidation(test_env):
         source_id=s1.id,
         category=Category.GUN.value,
         crop_rect=Rect(0, 0, 100, 100),
+        native_width=2778,
+        native_height=1284,
+        detector="gun_detector",
+        detector_version="2.0.0",
         gun_metadata=GunMetadata(weapon_name="M416", level=1),
     )
     session.assets.append(asset)
@@ -90,7 +95,7 @@ def test_category_override_and_downstream_invalidation(test_env):
 def test_invalid_category_rejected(test_env):
     """Unknown category strings are rejected before any mutations occur."""
     ws, session = test_env
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
     session.classifications[s1.id] = ClassificationResult(Category.OTHER.value, 0.0, Decision.UNKNOWN.value)
 
@@ -102,7 +107,7 @@ def test_invalid_category_rejected(test_env):
 def test_field_level_ocr_gun_resolutions(test_env):
     """Field-level OCR manual updates (level, name, counter, clear) update models and resolve review items."""
     ws, session = test_env
-    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0)
+    s1 = SourceImage(id="s1", filename="screen_1.png", path="", sha256="h1", source_index=0, width=2778, height=1284, mtime=1700000000.0)
     session.sources[s1.id] = s1
     session.classifications[s1.id] = ClassificationResult(Category.GUN.value, 0.95, Decision.AUTO_ACCEPT.value)
 
@@ -111,6 +116,10 @@ def test_field_level_ocr_gun_resolutions(test_env):
         source_id=s1.id,
         category=Category.GUN.value,
         crop_rect=Rect(0, 0, 100, 100),
+        native_width=2778,
+        native_height=1284,
+        detector="gun_detector",
+        detector_version="2.0.0",
         gun_metadata=GunMetadata(
             weapon_name="",
             name_confidence=0.0,
@@ -203,3 +212,31 @@ def test_reject_and_skip_item(test_env):
     service.reject_item(item.id, notes="False detection")
     assert item.status == ReviewStatus.REJECTED.value
     assert len(session.review_history) == 2
+
+    # Reject asset review item marks asset as rejected
+    asset = DetectedAsset(
+        id="reject_asset_1",
+        source_id="src_1",
+        category=Category.GUN.value,
+        crop_rect=Rect(0, 0, 100, 100),
+        native_width=2778,
+        native_height=1284,
+        detector="gun_detector",
+        detector_version="2.0.0",
+    )
+    session.assets.append(asset)
+    asset_item = ReviewItem(
+        id="review:reject_asset_1:quality:empty_suspected",
+        subsystem=ReviewSubsystem.ASSET_QUALITY.value,
+        asset_id=asset.id,
+    )
+    session.review_items[asset_item.id] = asset_item
+    service.reject_item(asset_item.id)
+    assert asset.manual_rejected is True
+    assert asset not in session.get_active_assets_by_category(Category.GUN.value)
+
+    # Restore rejected item
+    service.restore_item(asset_item.id)
+    assert asset_item.status == ReviewStatus.OPEN.value
+    assert asset.manual_rejected is False
+    assert asset in session.get_active_assets_by_category(Category.GUN.value)

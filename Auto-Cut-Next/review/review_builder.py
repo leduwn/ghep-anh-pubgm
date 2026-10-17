@@ -156,21 +156,35 @@ class ReviewQueueBuilder:
             # - status == NO_GRID for an eligible category expected to produce assets
             # - fallback_used on semantic category (GUN, VEHICLE, OUTFIT)
             # - status == ERROR
+            # - status == DEFERRED
             # - specialized confidence < threshold
             is_no_grid = (det.status == DetectionStatus.NO_GRID.value)
             is_error = (det.status == DetectionStatus.ERROR.value)
             is_review = (det.status == DetectionStatus.REVIEW.value)
+            is_deferred = (det.status == DetectionStatus.DEFERRED.value)
             is_semantic_fallback = bool(
                 getattr(det, "fallback_used", False) and cat_val in {"GUN", "VEHICLE", "OUTFIT"}
             )
-            spec_conf = getattr(det, "specialized_confidence", det.confidence)
+            spec_conf = float(getattr(det, "specialized_confidence", 0.0))
+            spec_att = bool(getattr(det, "specialized_attempted", False))
             spec_low = bool(
-                getattr(det, "specialized_attempted", False)
-                and spec_conf < self.detector_confidence_threshold
+                spec_att and spec_conf < self.detector_confidence_threshold
             )
+            det_conf = float(getattr(det, "confidence", 0.0))
 
-            needs_detection_review = is_error or is_review or is_semantic_fallback or (
-                is_no_grid and cat_val in {"GUN", "VEHICLE", "OUTFIT", "HELMET", "BACKPACK", "ITEM_SET"}
+            asset_producing_cats = {
+                "GUN", "VEHICLE", "OUTFIT", "ITEM_SET", "HELMET",
+                "BACKPACK", "MASK", "GRENADE", "PARACHUTE", "EMOTE", "MISC",
+            }
+            is_expected_no_grid = is_no_grid and (cat_val in asset_producing_cats)
+
+            needs_detection_review = (
+                is_error
+                or is_review
+                or is_semantic_fallback
+                or is_expected_no_grid
+                or spec_low
+                or is_deferred
             )
 
             if not needs_detection_review:
@@ -180,6 +194,9 @@ class ReviewQueueBuilder:
             if is_error:
                 priority = ReviewPriority.P0.value
                 reason = ReviewReason.PIPELINE_ERROR.value
+            elif is_deferred:
+                priority = ReviewPriority.P2.value
+                reason = ReviewReason.DEFERRED_DETECTION.value
             elif is_no_grid:
                 priority = ReviewPriority.P1.value if cat_val in {"GUN", "VEHICLE"} else ReviewPriority.P2.value
                 reason = ReviewReason.NO_GRID.value
@@ -205,17 +222,20 @@ class ReviewQueueBuilder:
             fingerprint = compute_machine_fingerprint(
                 subsystem_version=det.detector_version,
                 value=det.detector,
-                confidence=det.confidence,
+                confidence=det_conf,
                 reason=det.status,
                 extra_token=f"{fallback_used}:{len(src_assets)}",
             )
 
-            msg = (
-                f"Detection requires review on {src.filename}: "
-                f"status={det.status}, detector={det.detector} (conf={det.confidence:.2f})"
-            )
-            if fallback_used:
-                msg += f", fallback_used=True from {primary_det}"
+            if is_deferred:
+                msg = f"Detection deferred on {src.filename}: {det.reasons[0] if det.reasons else 'specialized detector required'}"
+            else:
+                msg = (
+                    f"Detection requires review on {src.filename}: "
+                    f"status={det.status}, detector={det.detector} (conf={det_conf:.2f})"
+                )
+                if fallback_used:
+                    msg += f", fallback_used=True from {primary_det}"
 
             item = ReviewItem(
                 id=review_id,
@@ -226,7 +246,7 @@ class ReviewQueueBuilder:
                 message=msg,
                 source_id=s_id,
                 category=cat_val,
-                confidence=det.confidence,
+                confidence=det_conf,
                 machine_value=det.detector,
                 metadata={
                     "status": det.status,
@@ -248,8 +268,8 @@ class ReviewQueueBuilder:
         # 3. Asset Quality Review Items (Deduplicated)
         # ----------------------------------------------------------------------
         for asset in session.assets:
-            # Skip assets with manual override
-            if asset.manual_override:
+            # Skip assets with manual override or manual rejection
+            if asset.manual_override or asset.manual_rejected:
                 continue
 
             # Only review meaningful actionable quality issues:
@@ -273,6 +293,13 @@ class ReviewQueueBuilder:
                 r_code = ReviewReason.LOCKED_ASSET.value
                 msg = f"Locked asset tile detected (order={asset.order})"
             elif has_quality and not source_has_detection_review:
+                # Filter out pure source-level fallback/classification notices from generic grid
+                non_source_reasons = [
+                    r for r in asset.review_reasons
+                    if "fallback" not in r.lower() and "classification" not in r.lower()
+                ]
+                if not non_source_reasons and asset.category.upper() in {"GUN", "VEHICLE", "OUTFIT"}:
+                    continue
                 r_code = ReviewReason.QUALITY_REVIEW.value
                 msg = f"Asset quality requires review (conf={asset.confidence:.2f})"
             else:
@@ -419,32 +446,56 @@ class ReviewQueueBuilder:
                 )
 
             # C. Field: kill_counter (preserves counter semantics!)
-            # Badge absent -> counter not required -> NO review
-            # Badge present -> OCR weak/failed -> REVIEW counter
-            if gm.counter_present:
+            # 1. User explicitly confirmed badge absent -> RESOLVED_MANUAL
+            if gm.counter_absent_manual:
                 cnt_id = make_ocr_review_id(asset.id, "counter")
-                if gm.counter_manual is not None:
-                    generated_items[cnt_id] = ReviewItem(
-                        id=cnt_id,
-                        subsystem=ReviewSubsystem.OCR_GUN.value,
-                        status=ReviewStatus.RESOLVED_MANUAL.value,
-                        priority=ReviewPriority.P2.value,
-                        reason=ReviewReason.OCR_COUNTER_UNCERTAIN.value,
-                        message=f"Kill counter manually set to '{gm.counter_manual}'",
-                        source_id=asset.source_id,
-                        asset_id=asset.id,
-                        category=Category.GUN.value,
-                        field_name="counter",
-                        confidence=1.0,
-                        machine_value=gm.kill_counter,
-                        resolution=ReviewResolution(
-                            action="set_counter",
-                            resolved_by="manual",
-                            value=gm.counter_manual,
-                            notes=f"Manually set counter to '{gm.counter_manual}'",
-                        ),
-                    )
-                elif not gm.kill_counter or gm.counter_confidence < self.ocr_accept_threshold:
+                generated_items[cnt_id] = ReviewItem(
+                    id=cnt_id,
+                    subsystem=ReviewSubsystem.OCR_GUN.value,
+                    status=ReviewStatus.RESOLVED_MANUAL.value,
+                    priority=ReviewPriority.P2.value,
+                    reason=ReviewReason.OCR_COUNTER_UNCERTAIN.value,
+                    message="Kill counter manually confirmed absent",
+                    source_id=asset.source_id,
+                    asset_id=asset.id,
+                    category=Category.GUN.value,
+                    field_name="counter",
+                    confidence=1.0,
+                    machine_value=gm.kill_counter,
+                    resolution=ReviewResolution(
+                        action="clear_counter",
+                        resolved_by="manual",
+                        value=None,
+                        notes="Counter badge manually confirmed absent",
+                    ),
+                )
+            # 2. User manually entered counter
+            elif gm.counter_manual is not None:
+                cnt_id = make_ocr_review_id(asset.id, "counter")
+                generated_items[cnt_id] = ReviewItem(
+                    id=cnt_id,
+                    subsystem=ReviewSubsystem.OCR_GUN.value,
+                    status=ReviewStatus.RESOLVED_MANUAL.value,
+                    priority=ReviewPriority.P2.value,
+                    reason=ReviewReason.OCR_COUNTER_UNCERTAIN.value,
+                    message=f"Kill counter manually set to '{gm.counter_manual}'",
+                    source_id=asset.source_id,
+                    asset_id=asset.id,
+                    category=Category.GUN.value,
+                    field_name="counter",
+                    confidence=1.0,
+                    machine_value=gm.kill_counter,
+                    resolution=ReviewResolution(
+                        action="set_counter",
+                        resolved_by="manual",
+                        value=gm.counter_manual,
+                        notes=f"Manually set counter to '{gm.counter_manual}'",
+                    ),
+                )
+            # 3. Badge present -> OCR weak/failed -> REVIEW counter
+            elif gm.counter_present:
+                if not gm.kill_counter or gm.counter_confidence < self.ocr_accept_threshold:
+                    cnt_id = make_ocr_review_id(asset.id, "counter")
                     fp = compute_machine_fingerprint(
                         subsystem_version=session.ocr_version,
                         value=str(gm.kill_counter),

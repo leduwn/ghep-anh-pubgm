@@ -250,37 +250,100 @@ def detect_backpack_selector_signals(context: ClassificationContext) -> SignalRe
 
 
 def detect_detail_popup_signals(context: ClassificationContext) -> SignalResult:
-    """Detects 2 vertical frame boundaries of the item detail popup frame below y=930."""
+    """Detects item detail popup frame boundaries and bright lobby visual cues."""
     gray = context.gray.astype(np.float32)
-    y1 = max(0, int(round(930 * context.scale_y)))
-    y2 = min(context.scan_h, int(round(1240 * context.scale_y)))
     radius = max(2, int(round(5 * context.scale_x)))
-
-    if y2 <= y1 or context.scan_w < 10:
-        return SignalResult("detail_popup_frame", 0.0, 0.0, "Scan area invalid")
-
-    frame_edge_scores = []
-    for base_x in (1325, 1685):
-        x = int(round(base_x * context.scale_x))
-        band_x1 = max(0, x - radius)
-        band_x2 = min(context.scan_w, x + radius + 1)
-        edge_band = gray[y1:y2, band_x1:band_x2]
-        if edge_band.shape[0] < 2 or edge_band.shape[1] < 2:
-            return SignalResult("detail_popup_frame", 0.0, 0.0, "Edge band missing")
-        diff_val = float(np.mean(np.abs(np.diff(edge_band, axis=1))))
-        frame_edge_scores.append(diff_val)
-
     resolution_factor = max(1.0, max(context.scale_y, 0.25) ** -0.80)
     edge_threshold = 2.82 * resolution_factor
-    min_score = min(frame_edge_scores) if frame_edge_scores else 0.0
-    score = min(1.0, min_score / (edge_threshold * 1.5)) if min_score >= edge_threshold else 0.0
+
+    # 1. Lower frame edges (y=930..1240) - standard / dark lobby original structure
+    y1 = max(0, int(round(930 * context.scale_y)))
+    y2 = min(context.scan_h, int(round(1240 * context.scale_y)))
+
+    frame_edge_scores = []
+    if y2 > y1 and context.scan_w >= 10:
+        for base_x in (1325, 1685):
+            x = int(round(base_x * context.scale_x))
+            band_x1 = max(0, x - radius)
+            band_x2 = min(context.scan_w, x + radius + 1)
+            edge_band = gray[y1:y2, band_x1:band_x2]
+            if edge_band.shape[0] >= 2 and edge_band.shape[1] >= 2:
+                frame_edge_scores.append(float(np.mean(np.abs(np.diff(edge_band, axis=1)))))
+            else:
+                frame_edge_scores.append(0.0)
+
+    min_lower = min(frame_edge_scores) if frame_edge_scores else 0.0
+    if len(frame_edge_scores) == 2 and min_lower >= edge_threshold:
+        score = min(1.0, min_lower / (edge_threshold * 1.5))
+        return SignalResult(
+            "detail_popup_frame",
+            score,
+            1.0 if score > 0.6 else 0.5,
+            f"Item detail frame edge score: {min_lower:.2f} (target >= {edge_threshold:.2f})",
+            raw_value=min_lower,
+        )
+
+    # 2. Bright lobby gated enhancement: right edge + header capsule + action btn / banner
+    if len(frame_edge_scores) == 2 and frame_edge_scores[1] >= 2.4 * resolution_factor:
+        tag_y1 = max(0, int(round(875 * context.scale_y)))
+        tag_y2 = min(context.scan_h, int(round(945 * context.scale_y)))
+        tag_x1 = max(0, int(round(1360 * context.scale_x)))
+        tag_x2 = min(context.scan_w, int(round(1640 * context.scale_x)))
+        surround_y1 = max(0, int(round(815 * context.scale_y)))
+        surround_y2 = min(context.scan_h, int(round(865 * context.scale_y)))
+
+        if tag_y2 > tag_y1 and tag_x2 > tag_x1 and surround_y2 > surround_y1:
+            tag_gray = gray[tag_y1:tag_y2, tag_x1:tag_x2]
+            surround_gray = gray[surround_y1:surround_y2, tag_x1:tag_x2]
+            surround_mean = float(np.mean(surround_gray))
+            tag_dark_ratio = float(np.count_nonzero(tag_gray < 95.0)) / float(max(1, tag_gray.size))
+            tag_text_ratio = float(np.count_nonzero(tag_gray > 160.0)) / float(max(1, tag_gray.size))
+
+            if surround_mean >= 120.0 and tag_dark_ratio >= 0.20 and tag_text_ratio >= 0.02:
+                btn_y1 = max(0, int(round(1145 * context.scale_y)))
+                btn_y2 = min(context.scan_h, int(round(1225 * context.scale_y)))
+                btn_x1 = max(0, int(round(1380 * context.scale_x)))
+                btn_x2 = min(context.scan_w, int(round(1620 * context.scale_x)))
+                has_action_btn = False
+                if btn_y2 > btn_y1 and btn_x2 > btn_x1:
+                    btn_gray = gray[btn_y1:btn_y2, btn_x1:btn_x2]
+                    btn_dark_ratio = float(np.count_nonzero(btn_gray < 90.0)) / float(max(1, btn_gray.size))
+                    if btn_dark_ratio >= 0.15:
+                        has_action_btn = True
+
+                banner_y1 = max(0, int(round(1000 * context.scale_y)))
+                banner_y2 = min(context.scan_h, int(round(1100 * context.scale_y)))
+                bx1 = max(0, int(round(1320 * context.scale_x)))
+                bx2 = min(context.scan_w, int(round(1650 * context.scale_x)))
+                has_colored_banner = False
+                if banner_y2 > banner_y1 and bx2 > bx1:
+                    banner_hsv = context.hsv[banner_y1:banner_y2, bx1:bx2]
+                    sat = banner_hsv[:, :, 1]
+                    val = banner_hsv[:, :, 2]
+                    vivid_mask = (sat >= 60) & (val >= 50)
+                    if float(np.count_nonzero(vivid_mask)) / float(max(1, vivid_mask.size)) >= 0.08:
+                        has_colored_banner = True
+
+                if has_action_btn or has_colored_banner:
+                    return SignalResult(
+                        "detail_popup_frame",
+                        0.92,
+                        0.95,
+                        f"Item detail frame bright lobby popup confirmed (edge_right={frame_edge_scores[1]:.2f}, dark_header=True, action_btn={has_action_btn}, color_banner={has_colored_banner})",
+                        raw_value={
+                            "edge_right": frame_edge_scores[1],
+                            "dark_header": True,
+                            "action_btn": has_action_btn,
+                            "color_banner": has_colored_banner,
+                        },
+                    )
 
     return SignalResult(
         "detail_popup_frame",
-        score,
-        1.0 if score > 0.6 else 0.5,
-        f"Item detail frame edge score: {min_score:.2f} (target >= {edge_threshold:.2f})",
-        raw_value=min_score,
+        0.0,
+        0.5,
+        f"Item detail frame edge score: {min_lower:.2f} (target >= {edge_threshold:.2f})",
+        raw_value=min_lower,
     )
 
 
